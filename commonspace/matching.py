@@ -7,15 +7,24 @@ from .errors import ApiError
 
 # ---------- preferences (E-PREF) ----------
 
+HOURS = ("morning", "midday", "afternoon", "evening")
+PREF_SOURCES = ("onboarding", "search", "booking", "settings")
+
+
 def get_prefs(conn, user_id):
+    """A user's saved defaults. has_profile is False until the preference funnel has run."""
     row = conn.execute("SELECT * FROM preferences WHERE user_id=?", (user_id,)).fetchone()
     if row is None:
-        return {"amenities": [], "work_mode": "focus", "max_km": config.DEFAULT_MAX_KM}
+        return {"amenities": [], "work_mode": "focus", "max_km": config.DEFAULT_MAX_KM, "hours": [],
+                "has_profile": False, "source": None, "updated_at": None}
     return {"amenities": sorted(db.split(row["amenities"])), "work_mode": row["work_mode"],
-            "max_km": row["max_km"]}
+            "max_km": row["max_km"], "hours": sorted(db.split(row["hours"]), key=HOURS.index),
+            "has_profile": row["source"] is not None, "source": row["source"], "updated_at": row["updated_at"]}
 
 
 def save_prefs(conn, user_id, data):
+    """PUT /api/users/{id}/preferences. Any field may be left out; source says which step of the
+    funnel wrote it (onboarding, search, booking, settings)."""
     db.user(conn, user_id)
     if not isinstance(data, dict):
         raise ApiError("body must be a JSON object")
@@ -25,11 +34,18 @@ def save_prefs(conn, user_id, data):
     max_km = db.req_float(data, "max_km", current["max_km"])
     if not 0 < max_km <= 50:
         raise ApiError("max_km must be between 0 and 50")
+    hours = data.get("hours", current["hours"])
+    if not isinstance(hours, list) or any(h not in HOURS for h in hours):
+        raise ApiError(f"hours must be a list of {', '.join(HOURS)}")
+    source = data.get("source", "settings")
+    if source not in PREF_SOURCES:
+        raise ApiError(f"source must be one of {', '.join(PREF_SOURCES)}")
     conn.execute(
-        "INSERT INTO preferences(user_id, amenities, work_mode, max_km) VALUES (?,?,?,?) "
-        "ON CONFLICT(user_id) DO UPDATE SET amenities=excluded.amenities, "
-        "work_mode=excluded.work_mode, max_km=excluded.max_km",
-        (user_id, db.join(amenities), mode, max_km))
+        "INSERT INTO preferences(user_id, amenities, work_mode, max_km, hours, source, updated_at)"
+        " VALUES (?,?,?,?,?,?,?) "
+        "ON CONFLICT(user_id) DO UPDATE SET amenities=excluded.amenities, work_mode=excluded.work_mode,"
+        " max_km=excluded.max_km, hours=excluded.hours, source=excluded.source, updated_at=excluded.updated_at",
+        (user_id, db.join(amenities), mode, max_km, db.join(hours), source, clock.fmt(clock.now())))
     return get_prefs(conn, user_id)
 
 

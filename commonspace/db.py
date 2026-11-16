@@ -34,7 +34,9 @@ CREATE TABLE IF NOT EXISTS users(                  -- E-USER
 CREATE TABLE IF NOT EXISTS preferences(            -- E-PREF
     user_id INTEGER PRIMARY KEY REFERENCES users(id),
     amenities TEXT NOT NULL DEFAULT '', work_mode TEXT NOT NULL DEFAULT 'focus',
-    max_km REAL NOT NULL DEFAULT 3.0);
+    max_km REAL NOT NULL DEFAULT 3.0,
+    hours TEXT NOT NULL DEFAULT '',            -- when they usually work: morning,midday,afternoon,evening
+    source TEXT, updated_at TEXT);             -- preference funnel: onboarding | search | booking | settings
 CREATE TABLE IF NOT EXISTS bookings(               -- E-BOOKING
     id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id),
     desk_id INTEGER NOT NULL REFERENCES desks(id),

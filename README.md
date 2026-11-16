@@ -44,7 +44,7 @@ In a second terminal:
 ```bash
 python3 puck_sim.py --demo         # scripted walk through every puck state (no server needed)
 python3 puck_sim.py --space 3      # fleet of simulated pucks heartbeating to the running server
-python3 -m unittest -v             # 77 tests: search, map, booking rules, timers, puck, insights, seed, HTTP API
+python3 -m unittest -v             # 78 tests: search, map, booking rules, timers, puck, insights, seed, HTTP API
 ```
 
 ## Layout
@@ -107,6 +107,7 @@ Times are `YYYY-MM-DDTHH:MM` (or with a space). Invalid input returns HTTP 400 w
 * **Holds (R-BOOK-01..04):** no-show release 15 min after start; away allowance 20 min; max 2 open bookings per user; extend +30 min up to twice if nobody has the desk next and the space is still open. Check-in opens 10 min before the start.
 * **Puck:** free = green solid, reserved = amber pulse (no-show countdown), occupied = red solid (time left), away = blue blink (away countdown). Tap: check in → step away → return. Hold: end or cancel. Only the booking's owner can act; the server holds booking truth (R-PUCK-07).
 * **Map (R-MAP-01/02):** each space gets available (2+ free), limited (1), full, no_match or closed. Map views are not logged as demand. "Show desks here" searches one space even outside the radius.
+* **Preference funnel:** new users get a three-step set-up (how you work, must-haves, distance and hours) on first open or after their first booking, pre-filled from what they already searched for. `PUT /api/users/{id}/preferences` records which step wrote the profile (`source`: onboarding, search, booking, settings) and `GET` returns `has_profile`.
 * **Space rules (R-SPACE-01..04):** each space sets max booking hours, food, walk-ins, lockers, pickup point and hours. Search hides spaces whose max is shorter than the requested window; walk-in-only shapes never appear in search; walk-ins are held only until the next booking.
 * **Insights (R-INSIGHT-01..03):** searches within 2 km over 28 days; gap = demand share − supply share per amenity; est. bookings/week = searches/week × demand share × 25% capture × (1 − supply share) + 50% of zero-result searches needing it per week. An active add-on trial counts its amenity as present on every desk in the space.
 

@@ -128,6 +128,17 @@ class SearchTests(Base):
         with self.assertRaises(NotFound):
             matching.search(self.conn, q(user_id=99))
 
+    def test_preference_funnel_marks_profile(self):
+        self.assertFalse(matching.get_prefs(self.conn, 1)["has_profile"])
+        p = matching.save_prefs(self.conn, 1, {"work_mode": "calls", "amenities": ["outlet"], "hours": ["morning"], "source": "onboarding"})
+        self.assertTrue(p["has_profile"])
+        self.assertEqual((p["source"], p["hours"]), ("onboarding", ["morning"]))
+        p = matching.save_prefs(self.conn, 1, {"max_km": 5, "source": "booking"})
+        self.assertEqual((p["work_mode"], p["max_km"], p["source"]), ("calls", 5, "booking"))
+        for bad in [{"hours": ["night"]}, {"source": "magic"}]:
+            with self.assertRaises(ApiError):
+                matching.save_prefs(self.conn, 1, bad)
+
     def test_saved_profile_used_for_score(self):
         matching.save_prefs(self.conn, 1, {"amenities": ["printer"], "max_km": 3})
         r = {d["desk_id"]: d for d in matching.search(self.conn, q())["results"]}

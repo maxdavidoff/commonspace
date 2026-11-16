@@ -10,7 +10,7 @@
   <div class="phone"><div class="screen" id="screen"></div></div>
   <div class="side">
     <div class="card"><h3>Pre-book prototype</h3>
-      <p class="muted small" id="sidehint">Find a space → space detail and rules → pick a table and time → phone for updates → confirmed → arrive → check in → locker → in session → step away → wrap up.</p>
+      <p class="muted small" id="sidehint">Find a space → space detail and rules → pick a table and time → phone for updates → confirmed → arrive → check in → locker → in session → step away → wrap up. New users get a 3-step preference set-up (how you work, must-haves, distance and hours) on first open or after their first booking.</p>
       <div class="row wrap" id="jump"></div></div>
     <div class="card"><h3>Simulate</h3>
       <p class="muted small">Away prompts, no-show releases and coaster timers run on the server clock. Fast-forward it here.</p>
@@ -25,6 +25,7 @@ const S = {               // session state for this phone
   user: null, mode: "now", filters: new Set(), start: null, hours: 2, space: null, tab: "desk",
   desk: null, booking: null, search: null, lockerDone: false, lockerLocked: false, checklist: {},
   screen: "find", prevScreen: null, onboard: 0,
+  prefs: null, funnel: { step: 0, draft: null, after: "find" },
 };
 const STATIC = !!window.CS_STATIC;
 
@@ -38,6 +39,15 @@ function query() {
   return { user_id: S.user, neighborhood: S.hood, start: S.start, duration_hours: S.hours,
            amenities: [...S.filters], work_mode: S.workMode || "focus" };
 }
+async function loadPrefs() { S.prefs = await api("GET", `/api/users/${S.user}/preferences`); return S.prefs; }
+function startFunnel(after) {
+  const p = S.prefs || {};
+  S.funnel = { step: 0, after, draft: {
+    work_mode: S.workMode || p.work_mode || "focus",
+    amenities: new Set(S.filters.size ? S.filters : (p.amenities || [])),
+    max_km: p.max_km || 3, hours: new Set(p.hours || []) } };
+  go("funnel");
+}
 async function myBooking() {
   const r = await api("GET", `/api/users/${S.user}/bookings`);
   S.booking = r.bookings.find(b => !S.booking || b.id === S.booking.id) || r.bookings[0] || null;
@@ -49,6 +59,7 @@ function screen(...kids) { const s = $("screen"); s.innerHTML = ""; for (const k
 const screens = {};
 
 screens.find = async () => {
+  if (!S.prefs) await loadPrefs();
   const m = await api("POST", "/api/map", query());
   const list = m.spaces.filter(s => s.in_range).sort((a, b) => b.free - a.free);
   const pins = (() => {
@@ -76,6 +87,9 @@ screens.find = async () => {
       el("div", { class: "row wrap", style: "margin-top:6px" }, META.amenities.map(a =>
         el("button", { class: "chip" + (S.filters.has(a) ? " on" : ""), onclick: () => { S.filters.has(a) ? S.filters.delete(a) : S.filters.add(a); render(); } },
           S.filters.has(a) ? "✓ " : "", amen(a))))),
+    S.prefs && !S.prefs.has_profile ? el("div", { class: "card row between", style: "background:var(--panel);border:0" },
+      el("div", {}, el("b", {}, "Set up your defaults"), el("div", { class: "muted small" }, "30 seconds. Desks get ranked by how you work.")),
+      el("button", { class: "btn sm", onclick: () => startFunnel("find") }, "Start")) : null,
     pins,
     el("div", { id: "spacelist", class: "col" }),
   );
@@ -164,7 +178,8 @@ screens.phone = async () => {
     el("div", { class: "muted small" }, "There is no SMS gateway in this prototype: enter 000000."),
     el("div", { class: "bottom" }, el("button", { class: "btn block", onclick: () => guard(async () => {
       const u = await api("POST", "/api/users/phone", { phone, code: code || "000000" });
-      S.user = u.user_id; S.userVerified = true; S.phone = phone; S.userName = u.name;
+      S.user = u.user_id; S.userVerified = true; S.phone = phone; S.userName = u.name; S.newUser = u.created;
+      await loadPrefs();
       go("confirm");
     }) }, "Confirm")),
   );
@@ -181,7 +196,9 @@ screens.confirm = async () => {
     el("div", {}, `${b.desk_label} · ${hhmm(b.start)} – ${hhmm(b.end)}`, el("div", { class: "muted small" }, S.space.name)),
     el("div", { class: "card steps" }, el("div", {}, S.rules.pickup), el("div", {}, "Get coaster"), el("div", {}, "Tap at table")),
     el("div", { class: "illus", style: "min-height:110px;font-size:13px;color:var(--muted)" }, `Route: ${S.rules.pickup.toLowerCase()} → ${b.desk_label}`),
-    el("div", { class: "card row between" }, el("span", {}, "Save info?"), el("div", { class: "row" }, el("button", { class: "btn sm" }, "Save"), el("button", { class: "btn ghost sm" }, "Not now"))),
+    !(S.prefs && S.prefs.has_profile) ? el("div", { class: "card row between" }, el("div", {}, el("span", {}, "Save these as your defaults?"), el("div", { class: "muted small" }, `${S.search ? S.search.work_mode : "focus"}${S.filters.size ? " · " + [...S.filters].map(amen).join(", ") : ""}`)),
+      el("div", { class: "row" }, el("button", { class: "btn sm", onclick: () => startFunnel("confirm") }, "Save"), el("button", { class: "btn ghost sm", onclick: () => guard(async () => {
+        S.prefs = await api("PUT", `/api/users/${S.user}/preferences`, { work_mode: S.search ? S.search.work_mode : undefined, amenities: [...S.filters], source: "booking" }); render(); }) }, "Just these"))) : null,
     el("div", { class: "note small" }, `Check in within ${META.config.no_show_minutes} min of ${hhmm(b.start)} or the table is released.`),
     el("div", { class: "bottom col" }, el("button", { class: "btn secondary block", onclick: () => toast("Added to calendar (prototype)") }, "Add to calendar"),
       el("button", { class: "btn block", onclick: () => go("navigate") }, "I'm here")),
@@ -289,21 +306,54 @@ screens.wrap = async () => {
     }) }, "End session")));
 };
 
+// ------------------------------------------------------------ preference funnel (new users)
+const MODES = { focus: ["Heads-down focus", "Quiet, outlets"], calls: ["Calls and meetings", "A booth or room, outlets"], meeting: ["Working with others", "Big table, whiteboard"], casual: ["Light work, change of scene", "Anywhere with an outlet"] };
+const HOURS = { morning: "Morning", midday: "Midday", afternoon: "Afternoon", evening: "Evening" };
+screens.funnel = async () => {
+  const f = S.funnel, d = f.draft, step = f.step;
+  const dots = el("div", { class: "dots" }, [0, 1, 2].map(i => el("i", { class: i === step ? "on" : "" })));
+  const skip = el("div", { class: "row between" }, step ? el("button", { class: "back", onclick: () => { f.step--; render(); } }, "‹") : el("span"),
+    el("button", { class: "btn ghost sm", onclick: () => finish(false) }, "Skip"));
+  const next = (label) => el("div", { class: "bottom" }, el("button", { class: "btn block", onclick: () => { if (step < 2) { f.step++; render(); } else finish(true); } }, label));
+  if (step === 0) screen(skip, dots, el("h2", {}, "How do you usually work?"), el("div", { class: "muted small" }, "Sets what we rank first. Change it any time."),
+    el("div", { class: "col" }, Object.entries(MODES).map(([k, [t, sub]]) => el("div", { class: "card row between", style: d.work_mode === k ? "border-color:var(--ink);outline:2px solid var(--ink)" : "", onclick: () => { d.work_mode = k; render(); } },
+      el("div", {}, el("b", {}, t), el("div", { class: "muted small" }, sub)), el("span", { class: "box", style: "width:20px;height:20px;border:1.5px solid var(--ink);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px" }, d.work_mode === k ? "●" : "")))),
+    next("Next"));
+  else if (step === 1) screen(skip, dots, el("h2", {}, "What do you need at a desk?"), el("div", { class: "muted small" }, "Must-haves filter every search. Nice-to-haves only affect the ranking, so pick only what you can't work without."),
+    el("div", { class: "row wrap" }, META.amenities.map(a => el("button", { class: "chip" + (d.amenities.has(a) ? " on" : ""), onclick: () => { d.amenities.has(a) ? d.amenities.delete(a) : d.amenities.add(a); render(); } }, d.amenities.has(a) ? "✓ " : "", amen(a)))),
+    el("div", { class: "note small" }, "Searches that find nothing are shared with nearby spaces as demand, without your name, so they know what to add."),
+    next("Next"));
+  else screen(skip, dots, el("h2", {}, "How far, and when?"),
+    el("div", { class: "card" }, el("div", { class: "row between" }, el("span", {}, "Up to"), el("b", {}, `${d.max_km} km`)),
+      el("input", { type: "range", min: 0.5, max: 10, step: 0.5, value: d.max_km, style: "padding:0", oninput: (e) => { d.max_km = +e.target.value; e.target.previousSibling.lastChild.textContent = `${d.max_km} km`; } })),
+    el("div", { class: "tiny" }, "When you usually work"),
+    el("div", { class: "row wrap" }, Object.entries(HOURS).map(([k, v]) => el("button", { class: "chip" + (d.hours.has(k) ? " on" : ""), onclick: () => { d.hours.has(k) ? d.hours.delete(k) : d.hours.add(k); render(); } }, v))),
+    el("div", { class: "note small" }, "Hours let us warn you about spaces that close before you'd finish."),
+    next("Save defaults"));
+  async function finish(save) {
+    if (save) await guard(async () => {
+      S.prefs = await api("PUT", `/api/users/${S.user}/preferences`, { work_mode: d.work_mode, amenities: [...d.amenities], max_km: d.max_km, hours: [...d.hours], source: "onboarding" });
+      S.workMode = d.work_mode; S.filters = new Set(d.amenities); toast("Defaults saved");
+    });
+    go(f.after);
+  }
+};
+
 // ------------------------------------------------------------ boot
 async function render() {
   $("jump").innerHTML = "";
-  for (const [k, label] of [["find", "Find"], ["space", "Space"], ["pick", "Pick"], ["confirm", "Booked"], ["checkin", "Check in"], ["session", "Session"], ["wrap", "Wrap up"]])
-    $("jump").append(el("button", { class: "chip" + (S.screen === k ? " on" : ""), onclick: () => guard(async () => { if (["confirm", "checkin", "session", "wrap"].includes(k) && !(await myBooking())) return toast("Book a table first"); if (k !== "find" && !S.space) return toast("Pick a space first"); go(k); }) }, label));
+  for (const [k, label] of [["find", "Find"], ["funnel", "Set up"], ["space", "Space"], ["pick", "Pick"], ["confirm", "Booked"], ["checkin", "Check in"], ["session", "Session"], ["wrap", "Wrap up"]])
+    $("jump").append(el("button", { class: "chip" + (S.screen === k ? " on" : ""), onclick: () => guard(async () => { if (k === "funnel") return startFunnel("find"); if (["confirm", "checkin", "session", "wrap"].includes(k) && !(await myBooking())) return toast("Book a table first"); if (k !== "find" && !S.space) return toast("Pick a space first"); go(k); }) }, label));
   await guard(screens[S.screen]);
 }
 (async () => {
   await loadMeta();
-  S.user = META.users[0].id; S.hood = META.neighborhoods[0].name; S.start = nowInput(0);
+  S.user = META.users[3].id; S.hood = META.neighborhoods[0].name; S.start = nowInput(0);   // user 4 has no profile yet
   for (const m of [5, 15, 50, 60]) $("simbtns").append(el("button", { class: "chip", onclick: () => guard(async () => {
     const r = await api("POST", "/api/dev/advance", { minutes: m }); await refreshTime(); $("simnow").textContent = "Sim time " + hhmm(META.now);
     if (r.released.length) toast("Released: " + r.released.map(x => x.reason.replace("_", " ")).join(", ")); render(); }) }, `+${m} min`));
   $("simnow").textContent = "Sim time " + hhmm(META.now);
-  const sel = el("select", { style: "margin-top:8px", onchange: (e) => { S.user = +e.target.value; S.userVerified = true; S.booking = null; render(); } },
+  const sel = el("select", { style: "margin-top:8px", onchange: (e) => { S.user = +e.target.value; S.userVerified = true; S.booking = null; S.prefs = null; S.filters = new Set(); render(); } },
     META.users.slice(0, 12).map(u => el("option", { value: u.id }, `Act as ${u.name}`)));
   $("simbtns").after(sel);
   if (!STATIC) await topbar("/app");

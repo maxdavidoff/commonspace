@@ -137,9 +137,12 @@ def _seed(conn, rng_seed):
                      (uid, f"{FIRST[(uid - 1) % 20]} {LAST[(uid - 1) // 5 % 8]}",
                       f"412555{uid:04d}" if uid % 3 else None))
         prefs = [a for a in ("outlet", "quiet", "phone_booth") if rng.random() < DEMAND[a]]
-        conn.execute("INSERT INTO preferences VALUES (?,?,?,?)",
-                     (uid, db.join(prefs), rng.choice(list(config.WORK_MODES)),
-                      rng.choice([2.0, 3.0, 3.0, 5.0])))
+        if uid % 4:   # three in four seeded users have been through the funnel
+            conn.execute("INSERT INTO preferences(user_id, amenities, work_mode, max_km, hours, source, updated_at)"
+                         " VALUES (?,?,?,?,?,?,?)",
+                         (uid, db.join(prefs), rng.choice(list(config.WORK_MODES)),
+                          rng.choice([2.0, 3.0, 3.0, 5.0]), rng.choice(["morning,midday", "midday,afternoon", "afternoon,evening"]),
+                          rng.choice(["onboarding", "onboarding", "booking", "search"]), clock.fmt(now - timedelta(days=rng.randint(1, 40)))))
 
     spaces = conn.execute("SELECT * FROM spaces").fetchall()
     desks = conn.execute("SELECT * FROM desks WHERE bookable=1").fetchall()
