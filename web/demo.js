@@ -27,6 +27,7 @@ window.CS_STATIC = true;
     document.head.append(s);
     await new Promise((res, rej) => { s.onload = res; s.onerror = () => rej(new Error("Could not load Pyodide from the CDN")); });
     const py = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.26.4/full/" });
+    await py.loadPackage("sqlite3");   // sqlite3 is unvendored from Pyodide's standard library
     const files = await fetch("backend.json").then(r => r.json());
     py.FS.mkdirTree("/app/commonspace");
     for (const [name, text] of Object.entries(files)) py.FS.writeFile("/app/" + name, text);
