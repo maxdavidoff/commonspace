@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CommonSpace · Find a space</title>
+<link rel="stylesheet" href="common.css"><link rel="icon" href="data:,">
+</head>
+<body>
+<div class="phone-wrap">
+  <div class="phone"><div class="screen" id="screen"></div></div>
+  <div class="side">
+    <div class="card"><h3>Pre-book prototype</h3>
+      <p class="muted small" id="sidehint">Find a space → space detail and rules → pick a table and time → phone for updates → confirmed → arrive → check in → locker → in session → step away → wrap up.</p>
+      <div class="row wrap" id="jump"></div></div>
+    <div class="card"><h3>Simulate</h3>
+      <p class="muted small">Away prompts, no-show releases and coaster timers run on the server clock. Fast-forward it here.</p>
+      <div class="row wrap" id="simbtns"></div>
+      <div class="muted small" id="simnow" style="margin-top:6px"></div></div>
+  </div>
+</div>
+<script src="demo.js"></script>
+<script src="api.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const S = {               // session state for this phone
+  user: null, mode: "now", filters: new Set(), start: null, hours: 2, space: null, tab: "desk",
+  desk: null, booking: null, search: null, lockerDone: false, lockerLocked: false, checklist: {},
+  screen: "find", prevScreen: null, onboard: 0,
+};
+const STATIC = !!window.CS_STATIC;
+
+// ------------------------------------------------------------ helpers
+function go(name) { S.prevScreen = S.screen; S.screen = name; render(); }
+function back() { go(S.prevScreen && S.prevScreen !== S.screen ? S.prevScreen : "find"); }
+function header(title, withBack = true) {
+  return el("div", { class: "row" }, withBack ? el("button", { class: "back", onclick: back }, "‹") : null, el("h2", {}, title));
+}
+function query() {
+  return { user_id: S.user, neighborhood: S.hood, start: S.start, duration_hours: S.hours,
+           amenities: [...S.filters], work_mode: S.workMode || "focus" };
+}
+async function myBooking() {
+  const r = await api("GET", `/api/users/${S.user}/bookings`);
+  S.booking = r.bookings.find(b => !S.booking || b.id === S.booking.id) || r.bookings[0] || null;
+  return S.booking;
+}
+function screen(...kids) { const s = $("screen"); s.innerHTML = ""; for (const k of kids.flat(3)) if (k !== null && k !== undefined && k !== false) s.append(k); }
+
+// ------------------------------------------------------------ screens
+const screens = {};
+
+screens.find = async () => {
+  const m = await api("POST", "/api/map", query());
+  const list = m.spaces.filter(s => s.in_range).sort((a, b) => b.free - a.free);
+  const pins = (() => {
+    const lats = m.spaces.map(s => s.lat).concat(m.origin.lat), lons = m.spaces.map(s => s.lon).concat(m.origin.lon);
+    const a0 = Math.min(...lats), a1 = Math.max(...lats), o0 = Math.min(...lons), o1 = Math.max(...lons);
+    const X = (lon) => 8 + (lon - o0) / ((o1 - o0) || 1) * 84, Y = (lat) => 92 - (lat - a0) / ((a1 - a0) || 1) * 76;
+    const tiles = [[2, 4, 28, 22], [34, 4, 30, 30], [68, 6, 28, 20], [4, 36, 24, 26], [44, 40, 22, 22], [72, 34, 24, 30], [2, 68, 30, 28], [38, 70, 26, 26], [70, 70, 26, 24]]
+      .map(([x, y, w, h]) => el("div", { class: "tile", style: `left:${x}%;top:${y}%;width:${w}%;height:${h}%` }));
+    return el("div", { class: "map" }, tiles,
+      el("div", { class: "you", style: `left:${X(m.origin.lon)}%;top:${Y(m.origin.lat)}%` }),
+      m.spaces.map(s => el("div", { class: "pin", style: `left:${X(s.lon)}%;top:${Y(s.lat)}%`, onclick: () => openSpace(s) },
+        el("b", { class: s.status }, s.status === "closed" ? "Closed" : s.status === "full" ? "Full" : s.status === "no_match" ? "–" : s.free),
+        el("span", {}, s.name.split(" ").slice(0, 2).join(" ")))));
+  })();
+  screen(
+    el("input", { placeholder: "Search spaces", oninput: (e) => { S.q = e.target.value; renderList(); } }),
+    el("div", { class: "seg" },
+      el("button", { class: S.mode === "now" ? "on" : "", onclick: () => { S.mode = "now"; S.start = nowInput(0); render(); } }, "Now"),
+      el("button", { class: S.mode === "later" ? "on" : "", onclick: () => { S.mode = "later"; render(); } }, "Later")),
+    S.mode === "later" ? el("div", { class: "row" },
+      el("input", { type: "datetime-local", value: S.start, onchange: (e) => { S.start = e.target.value; render(); } }),
+      el("select", { style: "width:90px", onchange: (e) => { S.hours = +e.target.value; render(); } },
+        [1, 2, 3, 4, 6, 8].map(h => el("option", { value: h, selected: h === S.hours }, `${h} h`)))) : null,
+    el("div", { class: "panel" }, el("div", { class: "tiny" }, `Filters · ${S.filters.size}`),
+      el("div", { class: "row wrap", style: "margin-top:6px" }, META.amenities.map(a =>
+        el("button", { class: "chip" + (S.filters.has(a) ? " on" : ""), onclick: () => { S.filters.has(a) ? S.filters.delete(a) : S.filters.add(a); render(); } },
+          S.filters.has(a) ? "✓ " : "", amen(a))))),
+    pins,
+    el("div", { id: "spacelist", class: "col" }),
+  );
+  function renderList() {
+    const box = $("spacelist"); box.innerHTML = "";
+    const q = (S.q || "").toLowerCase();
+    for (const s of list.filter(s => !q || s.name.toLowerCase().includes(q))) {
+      box.append(el("div", { class: "card", style: "cursor:pointer", onclick: () => openSpace(s) },
+        el("div", { class: "row between" }, el("b", {}, s.name),
+          el("span", { class: "pill" }, s.status === "closed" ? "Closed" : s.status === "no_match" ? "No match" : `${s.free} open`)),
+        el("div", { class: "muted small" }, `${s.distance_km} km · ${s.close_hour <= 17 ? "Closes " + hourLabel(s.close_hour) : "Open until " + hourLabel(s.close_hour)}` +
+          (s.status === "limited" ? " · last table" : ""))));
+    }
+    if (!list.length) box.append(el("p", { class: "muted small" }, "Nothing in range. This search still counts as demand, so spaces see what's missing."));
+  }
+  renderList();
+  async function openSpace(s) { S.space = s; S.tab = "desk"; go("space"); }
+};
+
+screens.space = async () => {
+  const [floor, settings] = await Promise.all([api("GET", `/api/spaces/${S.space.space_id}/floor`), api("GET", `/api/spaces/${S.space.space_id}/settings`)]);
+  S.floor = floor; S.rules = settings.rules;
+  const kinds = { desk: "Desks", pod: "Pods", room: "Call rooms" };
+  const have = new Set(floor.shapes.map(s => s.kind));
+  const amenities = [...new Set(floor.shapes.flatMap(s => s.amenities))].sort();
+  screen(
+    header(S.space.name),
+    el("div", { class: "illus", style: "min-height:120px;font-size:14px;color:var(--muted)" }, "Photos"),
+    el("h2", {}, `${S.space.name} · ${floor.floor_label}`),
+    el("div", { class: "tabs" }, Object.entries(kinds).filter(([k]) => have.has(k)).map(([k, v]) =>
+      el("button", { class: "chip" + (S.tab === k ? " on" : ""), onclick: () => { S.tab = k; render(); } }, v))),
+    el("div", { class: "panel" }, el("div", { class: "tiny" }, "Rules"),
+      el("div", { class: "row wrap", style: "margin-top:4px" },
+        el("span", { class: "pill" }, `${S.rules.max_hours} h max`),
+        el("span", { class: "pill" }, S.rules.food ? "Food OK" : "No food"),
+        el("span", { class: "pill" }, `Away ${S.rules.away_minutes} min`),
+        S.rules.min_purchase_per_hour ? el("span", { class: "pill" }, `$${S.rules.min_purchase_per_hour}/h min`) : null,
+        el("span", { class: "pill" }, `Coaster at ${S.rules.pickup.toLowerCase()}`))),
+    el("div", { class: "row wrap" }, amenities.map(a => el("span", { class: "pill" }, amen(a)))),
+    el("div", { class: "bottom" }, el("button", { class: "btn block", onclick: () => go("pick") }, `Choose ${kinds[S.tab].toLowerCase().replace(/s$/, "")}`)),
+  );
+};
+
+screens.pick = async () => {
+  const floor = S.floor = await api("GET", `/api/spaces/${S.space.space_id}/floor`);
+  const q = query(); q.space_id = S.space.space_id;
+  const res = await api("POST", "/api/search", q);
+  S.search = res;
+  const okIds = new Set(res.results.map(r => r.desk_id));
+  const candidates = res.results.filter(r => r.kind === S.tab);
+  if (!S.desk || !okIds.has(S.desk.desk_id)) S.desk = candidates[0] || null;
+  const start = S.start, endH = (() => { const d = new Date(start); d.setMinutes(d.getMinutes() + S.hours * 60); return d; })();
+  const plan = el("div", { class: "plan", style: `grid-template-columns:repeat(${floor.cols},1fr)` },
+    floor.shapes.map(s => {
+      const ok = okIds.has(s.desk_id), isSel = S.desk && S.desk.desk_id === s.desk_id;
+      const cls = ["shape", s.kind, ok ? "" : (s.bookable ? "in_use" : ""), isSel ? "sel" : ""].join(" ");
+      return el("div", { class: cls, style: `grid-column:${s.col + 1}${s.kind === "room" ? " / span 2" : ""};grid-row:${s.row + 1}`,
+        onclick: () => { if (ok) { S.desk = res.results.find(r => r.desk_id === s.desk_id); S.tab = s.kind; render(); } } },
+        el("span", { class: "lbl" }, s.label), el("span", { class: "sub" }, s.kind === "pickup" ? "coasters" : s.kind === "locker" ? "" : ok ? "open" : (s.bookable ? "taken" : "")));
+    }));
+  screen(
+    header("Choose " + (S.tab === "room" ? "room" : S.tab)),
+    plan,
+    el("div", { class: "row wrap" }, candidates.slice(0, 6).map(r => el("button", { class: "chip" + (S.desk && S.desk.desk_id === r.desk_id ? " on" : ""), onclick: () => { S.desk = r; render(); } }, r.desk_label))),
+    el("div", { class: "card" },
+      el("div", { class: "row between" }, el("b", {}, hhmm(res.start)), el("span", { class: "muted" }, "→"), el("b", {}, hhmm(res.end))),
+      el("input", { type: "range", min: 1, max: S.rules.max_hours * 2, value: S.hours * 2, style: "padding:0", oninput: (e) => { S.hours = e.target.value / 2; render(); } }),
+      el("div", { class: "muted small" }, `${S.hours} h · max ${S.rules.max_hours} h for ${S.tab === "room" ? "rooms" : "desks"} here`)),
+    S.desk && S.desk.kind === "room" ? el("div", { class: "card row between" }, el("span", {}, "Group"),
+      el("div", { class: "row" }, el("button", { class: "btn ghost sm", onclick: () => { S.group = Math.max(1, (S.group || 2) - 1); render(); } }, "−"),
+        el("b", {}, S.group || 2), el("button", { class: "btn ghost sm", onclick: () => { S.group = Math.min(S.desk.capacity, (S.group || 2) + 1); render(); } }, "+"))) : null,
+    S.desk ? el("div", { class: "muted small" }, `${S.desk.desk_label}: ${S.desk.amenities.map(amen).join(", ")} · match ${S.desk.score}/100`) :
+      el("div", { class: "muted small" }, "No " + S.tab + " is free for that window. Try another time."),
+    el("div", { class: "bottom" }, el("button", { class: "btn block", disabled: !S.desk, onclick: () => go(S.userVerified ? "confirm" : "phone") }, "Continue")),
+  );
+};
+
+screens.phone = async () => {
+  let phone = S.phone || "", code = "";
+  screen(
+    header("Get updates"),
+    el("div", { class: "bar" }, el("span", { style: "width:60%" })),
+    el("label", { class: "lab tiny" }, "Phone"), el("input", { type: "tel", placeholder: "(412) 555-0123", value: phone, oninput: (e) => phone = e.target.value }),
+    el("div", { class: "note" }, "Your number creates the account and gets reminders and release alerts. No password."),
+    el("label", { class: "lab tiny" }, "Code"), el("input", { inputmode: "numeric", placeholder: "••••••", oninput: (e) => code = e.target.value }),
+    el("div", { class: "muted small" }, "There is no SMS gateway in this prototype: enter 000000."),
+    el("div", { class: "bottom" }, el("button", { class: "btn block", onclick: () => guard(async () => {
+      const u = await api("POST", "/api/users/phone", { phone, code: code || "000000" });
+      S.user = u.user_id; S.userVerified = true; S.phone = phone; S.userName = u.name;
+      go("confirm");
+    }) }, "Confirm")),
+  );
+};
+
+screens.confirm = async () => {
+  if (!S.booking || S.booking.state === "ended" || S.booking.state === "released") {
+    const b = await api("POST", "/api/bookings", { user_id: S.user, desk_id: S.desk.desk_id, start: S.start, duration_hours: S.hours });
+    S.booking = b; S.lockerDone = false; S.lockerLocked = false; S.checklist = {};
+  }
+  const b = S.booking;
+  screen(
+    el("h2", {}, "Booked ✓"),
+    el("div", {}, `${b.desk_label} · ${hhmm(b.start)} – ${hhmm(b.end)}`, el("div", { class: "muted small" }, S.space.name)),
+    el("div", { class: "card steps" }, el("div", {}, S.rules.pickup), el("div", {}, "Get coaster"), el("div", {}, "Tap at table")),
+    el("div", { class: "illus", style: "min-height:110px;font-size:13px;color:var(--muted)" }, `Route: ${S.rules.pickup.toLowerCase()} → ${b.desk_label}`),
+    el("div", { class: "card row between" }, el("span", {}, "Save info?"), el("div", { class: "row" }, el("button", { class: "btn sm" }, "Save"), el("button", { class: "btn ghost sm" }, "Not now"))),
+    el("div", { class: "note small" }, `Check in within ${META.config.no_show_minutes} min of ${hhmm(b.start)} or the table is released.`),
+    el("div", { class: "bottom col" }, el("button", { class: "btn secondary block", onclick: () => toast("Added to calendar (prototype)") }, "Add to calendar"),
+      el("button", { class: "btn block", onclick: () => go("navigate") }, "I'm here")),
+  );
+};
+
+screens.navigate = async () => {
+  const b = S.booking;
+  screen(header("Navigate to your table"),
+    el("div", { class: "illus", style: "min-height:200px;flex-direction:column;gap:8px;font-size:13px;color:var(--muted)" },
+      el("div", { class: "row" }, el("span", { class: "pill" }, "Windows")),
+      el("div", { class: "row", style: "gap:30px" }, el("span", { class: "pill dark" }, b.desk_label), el("span", { class: "pill" }, S.rules.pickup), el("span", { class: "pill" }, "☕ Café")),
+      el("div", { class: "muted" }, "Entrance")),
+    el("div", { style: "text-align:center" }, el("div", { style: "font-size:40px" }, "↗"), el("div", { class: "timer" }, "18 m"), el("div", { class: "muted" }, `to ${b.desk_label}`)),
+    el("div", { class: "note small" }, "Bird's-eye route from the space's scanned floor plan. Arriving within a few meters unlocks check-in."),
+    el("div", { class: "bottom" }, el("button", { class: "btn block", onclick: () => go("arrived") }, "Simulate arriving")));
+};
+
+screens.arrived = async () => {
+  const b = S.booking;
+  screen(header("Arrived at table"),
+    el("div", { class: "illus", style: "min-height:160px;font-size:13px;color:var(--muted)" }, el("span", { class: "pill dark", style: "outline:3px dashed var(--ink);outline-offset:4px" }, b.desk_label)),
+    el("h2", { style: "text-align:center" }, "You're here"), el("div", { class: "muted", style: "text-align:center" }, b.desk_label),
+    el("div", { class: "bottom" }, el("button", { class: "btn block", onclick: () => go("checkin") }, "Check in")));
+};
+
+screens.checkin = async () => {
+  const b = S.booking;
+  const floor = S.floor;
+  const shape = floor.shapes.find(s => s.desk_id === b.desk_id);
+  const linked = b.state === "checked_in" || b.state === "away";
+  screen(header("Check in"),
+    el("div", { class: "illus", style: "min-height:150px" }, el("div", { class: "ring " + (linked ? "red" : "amber pulse"), style: "margin:0" }, linked ? "in use" : "TAP")),
+    el("div", { style: "text-align:center" }, `Tap coaster${b.coaster ? " #" + b.coaster : ""}`, el("div", { class: "muted small" }, "Hold your phone to the coaster (NFC)")),
+    el("div", { class: "muted small", style: "text-align:center" }, "or"),
+    el("button", { class: "btn ghost block", onclick: () => doTap() }, "Scan QR"),
+    el("div", { class: "card" }, el("div", { class: "tiny" }, b.desk_label), el("div", { class: "bar", style: "margin:6px 0" }, el("span", { style: "width:" + (linked ? "100%" : "30%") })),
+      el("div", { class: "muted small" }, linked ? `✓ Linked · ✓ Checked in · ${hhmm(b.checked_in_at)}` : "Next: set the coaster on the mat. Its light turns in use and the timer starts.")),
+    el("div", { class: "bottom" }, linked ? el("button", { class: "btn block", onclick: () => go(S.rules.lockers && !S.lockerDone ? "locker1" : "session") }, "Continue")
+      : el("button", { class: "btn block", onclick: () => doTap() }, "Simulate tap")));
+  async function doTap() {
+    await guard(async () => {
+      if (shape && shape.puck_id) await api("POST", `/api/device/pucks/${shape.puck_id}/gesture`, { user_id: S.user, kind: "tap" });
+      else await api("POST", `/api/bookings/${b.id}/checkin`, { user_id: S.user });
+      await myBooking(); render();
+    });
+  }
+};
+
+const onboard = [
+  ["🧳", "Your locker", "Right under your seat", "Next"],
+  ["📱", "Tap to lock", "Hold your phone to the door", "Lock"],
+  ["✓", "You're all set", `Step away anytime, back within ${0} min`, "Start working"],
+];
+screens.locker1 = async () => {
+  const i = S.onboard, [ic, t, sub, cta] = onboard[i];
+  screen(el("div", { class: "row between" }, el("span"), el("button", { class: "btn ghost sm", onclick: () => { S.lockerDone = true; go("session"); } }, "Skip")),
+    el("div", { class: "illus", style: "min-height:240px" }, ic),
+    el("div", { class: "dots" }, onboard.map((_, j) => el("i", { class: j === i ? "on" : "" }))),
+    el("h2", { style: "text-align:center" }, t), el("div", { class: "muted", style: "text-align:center" }, sub.replace("within 0 min", `within ${META.config.away_minutes} min`)),
+    el("div", { class: "bottom" }, el("button", { class: "btn block", onclick: () => { if (i === 1) S.lockerLocked = true; if (i < 2) { S.onboard++; render(); } else { S.lockerDone = true; S.onboard = 0; go("session"); } } }, cta)));
+};
+
+screens.session = async () => {
+  const b = await myBooking();
+  if (!b) return screens.find();
+  const away = b.state === "away";
+  screen(
+    el("div", { class: "row between" }, el("span", { class: "state " + (away ? "away" : "in_use") }, away ? "Away" : "In use"), el("b", {}, b.desk_label)),
+    el("div", { class: "row between" },
+      el("div", {}, el("div", { class: "timer" }, away ? mmss(b.away_left_s) : mmss(b.seconds_left)), el("div", { class: "muted small" }, away ? "to come back" : "time left · mirrored on the coaster")),
+      el("div", { class: "col" },
+        el("button", { class: "btn ghost sm", disabled: !b.extensions_left || away, onclick: () => act("extend") }, `+ Extend ${META.config.extend_minutes}`),
+        el("button", { class: "btn ghost sm", onclick: () => act("end") }, "End early"))),
+    el("div", { class: "bar" }, el("span", { style: `width:${Math.round(100 * (1 - b.seconds_left / Math.max(1, (new Date(b.end.replace(" ", "T")) - new Date(b.start.replace(" ", "T"))) / 1000)))}%` })),
+    away ? el("div", { class: "notif" }, el("div", { class: "app" }, el("span", {}, "CommonSpace"), el("span", {}, "now")),
+      el("b", {}, `Away ${META.config.away_minutes - Math.ceil(b.away_left_s / 60)} min`), el("div", {}, `Keep ${b.desk_label}?`),
+      el("div", { class: "row", style: "margin-top:8px" }, el("button", { class: "btn sm", onclick: () => act("return") }, "Keep"), el("button", { class: "btn ghost sm", onclick: () => act("extend") }, "+15 min"), el("button", { class: "btn ghost sm", onclick: () => act("end") }, "Release")),
+      el("div", { class: "muted small", style: "margin-top:6px" }, `No reply in ${mmss(b.away_left_s)} → table released, coaster turns open.`)) : null,
+    S.rules.lockers ? el("div", { class: "card row between" },
+      el("div", {}, el("b", {}, `Locker ${b.desk_id + 2}`), el("div", { class: "muted small" }, S.lockerLocked ? "🔒 Locked · opens when your session ends" : "Unlocked")),
+      el("button", { class: "btn ghost sm", onclick: () => { S.lockerLocked = !S.lockerLocked; render(); } }, S.lockerLocked ? "Unlock" : "Lock")) : null,
+    S.rules.food ? el("button", { class: "btn secondary block", onclick: () => toast(`Order placed · delivered to ${b.desk_label} (prototype)`) }, "☕ Order food / drink") : null,
+    el("div", { class: "bottom col" },
+      away ? null : el("button", { class: "btn ghost block", onclick: () => act("away") }, "Step away"),
+      el("button", { class: "btn ghost block", onclick: () => { S.booking = null; go("find"); } }, "Book another space"),
+      el("button", { class: "btn block", onclick: () => go("wrap") }, "Wrap up")),
+  );
+  async function act(a) { await guard(async () => { await api("POST", `/api/bookings/${b.id}/${a}`, { user_id: S.user }); await myBooking(); if (a === "end") go("wrap"); else render(); }); }
+};
+
+screens.wrap = async () => {
+  const b = S.booking;
+  const items = [["coaster", `Return coaster${b.coaster ? " #" + b.coaster : ""}`, S.rules.pickup], ...(S.rules.lockers ? [["locker", "Collect locker items", S.lockerLocked ? "Locker still has items" : "Locker is empty"]] : [])];
+  const done = items.filter(([k]) => S.checklist[k]).length;
+  screen(header("Before you leave"),
+    el("div", { class: "row between" }, el("span", { class: "muted small" }, `${done} of ${items.length} done`), el("span", { class: "muted small" }, `${Math.round(100 * done / items.length)}%`)),
+    el("div", { class: "bar" }, el("span", { style: `width:${100 * done / items.length}%` })),
+    el("div", {}, items.map(([k, t, sub]) => el("div", { class: "check" + (S.checklist[k] ? " done" : ""), onclick: () => { S.checklist[k] = !S.checklist[k]; if (k === "locker") S.lockerLocked = false; render(); } },
+      el("span", { class: "box" }, S.checklist[k] ? "✓" : ""), el("div", {}, el("div", {}, t), el("div", { class: "muted small" }, S.checklist[k] ? "Done" : sub))))),
+    el("div", { class: "note small" }, "Coaster return and locker sensors tick these off on their own. Returning the coaster at the desk is the checkout."),
+    el("div", { class: "bottom" }, el("button", { class: "btn block", onclick: () => guard(async () => {
+      if (b.state !== "ended" && b.state !== "released") await api("POST", `/api/bookings/${b.id}/return_coaster`, {});
+      S.booking = null; toast("Session ended. Thanks for working here."); go("find");
+    }) }, "End session")));
+};
+
+// ------------------------------------------------------------ boot
+async function render() {
+  $("jump").innerHTML = "";
+  for (const [k, label] of [["find", "Find"], ["space", "Space"], ["pick", "Pick"], ["confirm", "Booked"], ["checkin", "Check in"], ["session", "Session"], ["wrap", "Wrap up"]])
+    $("jump").append(el("button", { class: "chip" + (S.screen === k ? " on" : ""), onclick: () => guard(async () => { if (["confirm", "checkin", "session", "wrap"].includes(k) && !(await myBooking())) return toast("Book a table first"); if (k !== "find" && !S.space) return toast("Pick a space first"); go(k); }) }, label));
+  await guard(screens[S.screen]);
+}
+(async () => {
+  await loadMeta();
+  S.user = META.users[0].id; S.hood = META.neighborhoods[0].name; S.start = nowInput(0);
+  for (const m of [5, 15, 50, 60]) $("simbtns").append(el("button", { class: "chip", onclick: () => guard(async () => {
+    const r = await api("POST", "/api/dev/advance", { minutes: m }); await refreshTime(); $("simnow").textContent = "Sim time " + hhmm(META.now);
+    if (r.released.length) toast("Released: " + r.released.map(x => x.reason.replace("_", " ")).join(", ")); render(); }) }, `+${m} min`));
+  $("simnow").textContent = "Sim time " + hhmm(META.now);
+  const sel = el("select", { style: "margin-top:8px", onchange: (e) => { S.user = +e.target.value; S.userVerified = true; S.booking = null; render(); } },
+    META.users.slice(0, 12).map(u => el("option", { value: u.id }, `Act as ${u.name}`)));
+  $("simbtns").after(sel);
+  if (!STATIC) await topbar("/app");
+  render();
+  setInterval(() => { if (["session", "checkin"].includes(S.screen)) guard(screens[S.screen]); }, 4000);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CommonSpace · Table</title>
+<link rel="stylesheet" href="common.css"><link rel="icon" href="data:,">
+<style>.url { font-size: 11px; color: var(--muted); font-family: ui-monospace, monospace; }</style>
+</head>
+<body>
+<div class="phone-wrap">
+  <div class="phone"><div class="screen" id="screen"></div></div>
+  <div class="side">
+    <div class="card"><h3>Walk-in · no app, no booking</h3>
+      <p class="muted small">This is the page a walk-in sees after scanning the QR on the table mat. It runs in the phone browser; updates arrive by SMS.</p>
+      <label class="lab tiny">Table</label><select id="desk"></select></div>
+    <div class="card"><h3>Simulate</h3><div class="row wrap" id="simbtns"></div></div>
+  </div>
+</div>
+<script src="api.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+let deskId = +(location.pathname.match(/\/t\/(\d+)/) || [])[1] || +param("desk", 2);
+let view = "status", hold = null, phone = "";
+function screen(...k) { const s = $("screen"); s.innerHTML = ""; for (const x of k.flat(3)) if (x !== null && x !== undefined && x !== false) s.append(x); }
+const url = (p) => el("div", { class: "url" }, `commonspace.app/t/${deskId}${p}`);
+
+async function render() {
+  const st = await api("GET", `/api/desks/${deskId}/status`);
+  const r = st.rules;
+  const rulesLine = `${r.food ? "Food OK" : "No food"} · away limit ${r.away_minutes} min` + (r.lockers ? " · lockers need a coaster" : "");
+  if (view === "status") {
+    const line = {
+      free: [`${st.label} is free until ${hhmm(st.free_until)}`, st.next_booking_at ? `Booked from ${hhmm(st.next_booking_at)}. You're welcome to work here until then.` : "Nothing booked here today. Work here until closing."],
+      booked_soon: [`${st.label} is booked at ${hhmm(st.next_booking_at)}`, "Under 15 minutes left. Pick another open table."],
+      booked: [`${st.label} is booked`, `Someone is arriving now; it's held until ${hhmm(st.current_until)}.`],
+      in_use: [`${st.label} is in use`, `Free again at ${hhmm(st.current_until)}.`],
+      closed: [`${st.space_name} is closed`, "Come back during opening hours."],
+    }[st.status];
+    screen(url(""),
+      el("div", { class: "tiny" }, `${st.space_name} · ${st.floor_label}`),
+      el("h1", {}, line[0]), el("div", { class: "muted" }, line[1]),
+      el("div", { class: "panel" }, el("div", { class: "tiny" }, "Rules here"), el("div", { class: "small", style: "margin-top:4px" }, rulesLine)),
+      el("div", { class: "row wrap" }, st.amenities.map(a => el("span", { class: "pill" }, amen(a)))),
+      el("div", { class: "bottom col" },
+        st.status === "free" && st.walkins_allowed ? el("button", { class: "btn block", onclick: () => { view = "hold"; render(); } }, "Hold this table") : null,
+        el("button", { class: "btn ghost block", onclick: () => { view = "open"; render(); } }, "See other open tables")),
+      el("div", { class: "note small" }, "Answers the #1 walk-in fear: how long do I have before someone shows up?"));
+  } else if (view === "hold") {
+    screen(url("/hold"), el("h2", {}, `Hold ${st.label}`),
+      el("label", { class: "lab tiny" }, "Phone number (for heads-ups)"), el("input", { type: "tel", placeholder: "(412) 555-0123", value: phone, oninput: (e) => phone = e.target.value }),
+      el("div", { class: "panel" }, el("div", { class: "tiny" }, "Next step"), el("div", { class: "small", style: "margin-top:4px" }, `Pick up a coaster at the ${r.pickup.toLowerCase()} to lock in the table${r.lockers ? " and unlock a locker" : ""}.`)),
+      el("div", { class: "illus", style: "min-height:90px;font-size:12px;color:var(--muted)" }, `Mini map · you → ${r.pickup.toLowerCase()}`),
+      el("div", { class: "bottom col" },
+        el("button", { class: "btn block", onclick: () => guard(async () => { hold = await api("POST", `/api/desks/${deskId}/hold`, { phone }); view = "held"; render(); }) }, `Hold until ${hhmm(st.free_until)}`),
+        el("button", { class: "btn ghost block", onclick: () => { view = "status"; render(); toast("Table shows as unclaimed on the floor display"); } }, "Skip, just sit here")));
+  } else if (view === "held") {
+    const b = hold;
+    screen(url("/hold"), el("h2", {}, `${b.desk_label} is yours`), el("div", { class: "muted" }, `Until ${hhmm(b.end)} · ${minutesLeft(b.seconds_left)} left`),
+      el("div", { class: "notif" }, el("div", { class: "app" }, el("span", {}, "Messages"), el("span", {}, "now")), el("div", {}, `CommonSpace: ${b.desk_label} held until ${hhmm(b.end)}. Reply K anytime to keep it after stepping away.`)),
+      el("div", { class: "panel small" }, b.next_step),
+      el("div", { class: "bottom col" }, el("button", { class: "btn ghost block", onclick: () => { view = "sms"; render(); } }, "Simulate: a booking is coming"), el("button", { class: "btn block", onclick: () => { view = "done"; render(); } }, "Wrap up")));
+  } else if (view === "sms") {
+    const open = (await api("GET", `/api/spaces/${st.space_id}/floor`)).shapes.filter(s => s.status === "free" && s.desk_id !== deskId).slice(0, 4);
+    screen(el("div", { class: "tiny" }, "Lock screen"), el("div", { class: "notif" }, el("div", { class: "app" }, el("span", {}, "SMS"), el("span", {}, "now")),
+        el("b", {}, `${st.label} is booked at ${hhmm(hold.end)}`), el("div", { class: "small" }, `${open.length} tables are open on this floor right now. Tap to see them.`), el("div", { class: "url" }, "commonspace.app/open")),
+      el("div", { class: "tiny" }, "Tapped link"),
+      el("div", { class: "list" }, open.map(s => el("div", { class: "row between", style: "padding:9px 0" }, el("b", {}, s.label), el("span", { class: "muted small" }, `free till ${hhmm(s.free_until)}`)))),
+      el("div", { class: "note small" }, "Fixes \"why is this person in my pod?\" before it happens."),
+      el("div", { class: "bottom" }, el("button", { class: "btn ghost block", onclick: () => { view = "held"; render(); } }, "Back")));
+  } else if (view === "open") {
+    const floor = await api("GET", `/api/spaces/${st.space_id}/floor`);
+    const open = floor.shapes.filter(s => s.status === "free");
+    screen(url(""), el("h2", {}, `${open.length} open on ${floor.floor_label}`),
+      el("div", { class: "list" }, open.map(s => el("div", { class: "row between", style: "padding:9px 0;cursor:pointer", onclick: () => { deskId = s.desk_id; view = "status"; $("desk").value = deskId; render(); } },
+        el("div", {}, el("b", {}, s.label), el("div", { class: "muted small" }, s.amenities.map(amen).join(", "))), el("span", { class: "muted small" }, `free till ${hhmm(s.free_until)}`)))),
+      el("div", { class: "bottom" }, el("button", { class: "btn ghost block", onclick: () => { view = "status"; render(); } }, "Back")));
+  } else if (view === "done") {
+    screen(url("/done"), el("h2", {}, "Thanks for working here"),
+      el("div", { class: "tiny" }, "Before you go"),
+      el("div", {}, el("div", { class: "check" }, el("span", { class: "box" }), el("span", {}, `Return coaster to the ${r.pickup.toLowerCase()}`)), r.lockers ? el("div", { class: "check" }, el("span", { class: "box" }), el("span", {}, "Grab anything from your locker")) : null),
+      el("div", { class: "panel" }, el("div", { class: "tiny" }, "Next time"), el("div", { class: "small", style: "margin-top:4px" }, "Book a table ahead and skip the guesswork. Your number is saved.")),
+      el("div", { class: "bottom col" }, el("a", { class: "btn block", href: pageHref("/app") }, "Get the app"), el("button", { class: "btn ghost block", onclick: () => guard(async () => { if (hold) await api("POST", `/api/bookings/${hold.id}/return_coaster`, {}); hold = null; view = "status"; render(); }) }, "No thanks")));
+  }
+}
+(async () => {
+  await loadMeta();
+  const floors = await Promise.all(META.spaces.map(s => api("GET", `/api/spaces/${s.id}/floor`)));
+  for (const f of floors) for (const s of f.shapes.filter(s => s.bookable)) $("desk").append(el("option", { value: s.desk_id, selected: s.desk_id === deskId }, `${f.space_name} · ${s.label}`));
+  $("desk").onchange = (e) => { deskId = +e.target.value; view = "status"; hold = null; render(); };
+  for (const m of [15, 60]) $("simbtns").append(el("button", { class: "chip", onclick: () => guard(async () => { await api("POST", "/api/dev/advance", { minutes: m }); render(); }) }, `+${m} min`));
+  if (!window.CS_STATIC) await topbar("/t/2");
+  guard(render);
+})();
+</script>
+</body>
+</html>

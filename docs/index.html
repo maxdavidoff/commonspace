@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CommonSpace demo</title><link rel="stylesheet" href="common.css"><link rel="icon" href="data:,">
+<style>main{max-width:900px;margin:0 auto;padding:40px 20px;display:grid;gap:14px} a.card{text-decoration:none;display:block} a.card:hover{border-color:var(--ink)}</style>
+</head><body><main>
+<h1>CommonSpace</h1>
+<p class="muted">Find and hold a desk in cafes, libraries and coworking spaces. A coaster on every table shows whether it is free; every search and booking feeds demand insights that tell each space which add-on to trial.</p>
+<p class="small muted">Every page below runs the real Python backend inside your browser (Pyodide), seeded with six Pittsburgh spaces and six weeks of history. Nothing is shared between visitors and data resets on reload. The same code runs as a normal server with <code>python3 server.py</code>.</p>
+<a class="card" href="app.html"><h2>Worker app</h2><p class="muted">Pre-book flow: find a space, rules, pick a table, phone, confirm, arrive, check in, locker, session, away, wrap up.</p></a>
+<a class="card" href="t.html?desk=4"><h2>Walk-in (table mat QR)</h2><p class="muted">No app, no booking: scan the mat, see free-until, hold with a phone number, SMS when a booking is coming.</p></a>
+<a class="card" href="floor.html?space=2"><h2>Floor overview display</h2><p class="muted">Entrance and elevator screen: open desks, booked soon, scan to hold.</p></a>
+<a class="card" href="room.html?space=2"><h2>Room display</h2><p class="muted">Replaces the whiteboard on each pod and room.</p></a>
+<a class="card" href="provider.html?space=2"><h2>Provider</h2><p class="muted">Dashboard, tag bookable zones, set rules and publish, staff desk hand-off and coaster return.</p></a>
+<a class="card" href="pucks.html"><h2>Coaster wall</h2><p class="muted">Every coaster's light and countdown; tap or hold as any user.</p></a>
+<p class="small muted">Source: <a href="https://github.com/maxdavidoff/commonspace">github.com/maxdavidoff/commonspace</a></p>
+</main></body></html>

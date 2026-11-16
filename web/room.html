@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CommonSpace · Room display</title>
+<link rel="stylesheet" href="common.css"><link rel="icon" href="data:,">
+<style>
+  .rooms { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 18px; padding: 28px 40px; }
+  .rd { border: 2px solid var(--ink); border-radius: 18px; padding: 22px; min-height: 190px; display: flex; flex-direction: column; justify-content: space-between; background: #fff; }
+  .rd.in_use, .rd.booked { background: var(--ink); color: #fff; } .rd.booked_soon { border-style: dashed; }
+  .rd .name { font-size: 24px; font-weight: 600; } .rd .st { font-size: 30px; font-weight: 600; margin: 10px 0; } .rd .sub { font-size: 15px; opacity: .8; }
+</style>
+</head>
+<body>
+<div class="rooms" id="r"></div>
+<script src="api.js"></script>
+<script>
+const spaceId = +param("space", 2);
+async function render() {
+  const f = await api("GET", `/api/spaces/${spaceId}/floor`);
+  const r = document.getElementById("r"); r.innerHTML = "";
+  const rooms = f.shapes.filter(s => s.kind === "room" || s.kind === "pod");
+  if (!rooms.length) r.append(el("p", { class: "muted" }, "No rooms or pods tagged in this space yet."));
+  for (const s of rooms) {
+    const [st, sub] = { free: ["Available", s.next_booking_at ? `Walk in until ${hhmm(s.next_booking_at)}` : "Walk in anytime"],
+      booked_soon: [`Booked ${hhmm(s.next_booking_at)}`, `Held ${META.config.no_show_minutes} min for arrival`],
+      booked: ["Booked", `Held until ${hhmm(s.current_until)} for arrival`],
+      in_use: ["In use", `Until ${hhmm(s.current_until)}` + (s.next_booking_at ? ` · next ${hhmm(s.next_booking_at)}` : "")],
+      closed: ["Closed", ""] }[s.status] || ["", ""];
+    r.append(el("div", { class: "rd " + s.status }, el("div", { class: "name" }, `${s.label} · ${s.capacity}`), el("div", {}, el("div", { class: "st" }, st), el("div", { class: "sub" }, sub)),
+      el("div", { class: "sub" }, s.amenities.map(amen).join(" · "))));
+  }
+}
+(async () => {
+  await loadMeta();
+  const sel = el("select", { onchange: (e) => location.href = (window.CS_STATIC ? "room.html" : "/room") + "?space=" + e.target.value, style: "width:auto;padding:4px 8px;border-radius:6px" }, META.spaces.map(s => el("option", { value: s.id, selected: s.id === spaceId }, s.name)));
+  if (!window.CS_STATIC) await topbar("/room", sel);
+  else document.body.prepend(el("div", { class: "row", style: "padding:10px 40px;background:#fff;border-bottom:1px solid var(--line)" }, el("a", { href: "index.html", class: "muted small" }, "← Demo home"), sel));
+  guard(render); onTick.push(() => guard(render)); setInterval(() => guard(render), 5000);
+})();
+</script>
+</body>
+</html>

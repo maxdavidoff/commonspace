@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CommonSpace · Puck wall</title>
+<link rel="stylesheet" href="common.css">
+<link rel="icon" href="data:,">
+<style>
+  .wall { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .puck { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 10px; text-align: center; }
+  .puck .btns { display: flex; gap: 6px; justify-content: center; margin-top: 6px; }
+  .space-h { margin: 8px 0 4px; font-weight: 700; }
+</style>
+</head>
+<body>
+<main class="page">
+  <div class="row wrap"><label style="margin:0">Tap or hold as</label><select id="user" style="width:220px"></select>
+    <label style="margin:0">Space</label><select id="space" style="width:240px"><option value="">All spaces</option></select>
+    <span class="muted small">Coaster states: open (green), in use (red, time left), away (blue, countdown), ending soon. Tap: check in · step away · return. Hold: end or cancel.</span></div>
+  <div id="wall"></div>
+</main>
+<script src="demo.js"></script>
+<script src="api.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+async function load() {
+  const r = await api("GET", "/api/pucks");
+  const filter = $("space").value;
+  const wall = $("wall"); wall.innerHTML = "";
+  const groups = {};
+  for (const p of r.pucks) if (!filter || p.space_id == filter) (groups[p.space_name] ||= []).push(p);
+  for (const [name, ps] of Object.entries(groups)) {
+    wall.append(el("div", { class: "space-h" }, name));
+    const g = el("div", { class: "wall" });
+    for (const p of ps) {
+      const gest = (kind) => el("button", { class: "ghost", onclick: () => guard(async () => {
+        const x = await api("POST", `/api/device/pucks/${p.puck_id}/gesture`, { user_id: +$("user").value, kind });
+        toast(`${p.desk_label}: ${x.action} → ${x.led.state}`); load();
+      }) }, kind);
+      g.append(el("div", { class: "puck" },
+        el("b", {}, p.desk_label),
+        el("div", { class: `ring ${p.color} ${p.pattern}` }, p.countdown_s !== null ? mmss(p.countdown_s) : ""),
+        el("span", { class: "state " + p.state }, p.state === "occupied" ? "in use" : p.state === "free" ? "open" : p.state),
+        el("div", { class: "muted", style: "font-size:11px" }, `battery ${p.battery}%${p.low_battery ? " · LOW" : ""}`),
+        el("div", { class: "btns" }, gest("tap"), gest("hold"))));
+    }
+    wall.append(g);
+  }
+}
+(async () => {
+  if (!window.CS_STATIC) await topbar("/pucks"); else document.querySelector("main").prepend(el("a", { href: "index.html", class: "muted small" }, "← Demo home"));
+  META.users.forEach(u => $("user").append(el("option", { value: u.id }, `${u.id} · ${u.name}`)));
+  META.spaces.forEach(s => $("space").append(el("option", { value: s.id }, s.name)));
+  $("space").onchange = () => guard(load);
+  onTick.push(() => guard(load));
+  await guard(load);
+  setInterval(() => guard(load), 3000);
+})();
+</script>
+</body>
+</html>

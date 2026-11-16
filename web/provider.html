@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CommonSpace · Provider</title>
+<link rel="stylesheet" href="common.css"><link rel="icon" href="data:,">
+<style>
+  .win { border: 1px solid var(--line); border-radius: 14px; background: #fff; overflow: hidden; }
+  .win .bar3 { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+  .win .bar3 i { width: 8px; height: 8px; border-radius: 50%; background: var(--line); display: inline-block; }
+  .win .body { padding: 14px 16px; }
+  .rule { display: flex; justify-content: space-between; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--line); }
+  .rule input { width: 80px; text-align: right; padding: 5px 8px; }
+  .unmet .bar { width: 160px; display: inline-block; vertical-align: middle; margin-left: 8px; }
+  .hours { height: 130px; }
+</style>
+</head>
+<body>
+<main class="page">
+  <div class="row between">
+    <div class="row"><label class="tiny" style="margin:0">Space</label><select id="space" style="width:260px"></select><span class="muted small" id="hours"></span></div>
+    <div class="tabs" id="tabs"></div>
+  </div>
+  <div id="view"></div>
+</main>
+<script src="api.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+let view = param("view", "dashboard"), period = "today", tag = "desk", staffQ = "";
+const pct = (x) => Math.round(x * 100) + "%";
+const sid = () => +$("space").value;
+const win = (title, ...kids) => el("div", { class: "win" }, el("div", { class: "bar3" }, el("i"), el("i"), el("i"), el("span", { class: "grow" }), el("span", {}, title)), el("div", { class: "body col" }, ...kids));
+
+const views = {};
+
+views.dashboard = async () => {
+  const [d, f] = await Promise.all([api("GET", `/api/spaces/${sid()}/dashboard?period=${period}`), api("GET", `/api/spaces/${sid()}`)]);
+  const max = Math.max(1, ...d.by_hour.map(h => Math.max(h.bookings, h.checkins)));
+  const maxU = Math.max(1, ...d.unmet_searches.map(u => u.zero_result_searches));
+  return win(d.space_name,
+    el("div", { class: "row between" }, el("div", { class: "seg", style: "width:260px" }, ["today", "week", "month"].map(p => el("button", { class: p === period ? "on" : "", onclick: () => { period = p; render(); } }, p[0].toUpperCase() + p.slice(1)))),
+      el("span", { class: "muted small" }, `Live floor from the coasters · ${hhmm(d.now)}`)),
+    el("div", { class: "kpis" }, [[`${d.kpis.in_use} / ${d.kpis.desks}`, "In use"], [d.kpis.checkins, "Check-ins"], [d.kpis.no_shows, "No-shows"], [d.kpis.walkins, "Walk-ins"]]
+      .map(([v, k]) => el("div", { class: "kpi" }, el("div", { class: "k" }, k), el("div", { class: "v" }, v)))),
+    el("div", { class: "panel" }, el("div", { class: "tiny" }, "Bookings vs check-ins by hour"),
+      el("div", { class: "hours", style: "margin-top:8px" }, d.by_hour.map(h => el("div", { title: `${hourLabel(h.hour)} · ${h.bookings} booked · ${h.checkins} checked in` },
+        el("i", { style: `height:${100 * h.bookings / max}%` }), el("i", { class: "ci", style: `height:${100 * h.checkins / max}%` })))),
+      el("div", { class: "row between muted small" }, el("span", {}, "12 AM"), el("span", {}, "6 AM"), el("span", {}, "12 PM"), el("span", {}, "6 PM"), el("span", {}, "11 PM")),
+      el("div", { class: "legend small", style: "margin-top:4px" }, el("span", {}, el("i", { class: "in_use" }), "Bookings"), el("span", {}, el("i", { style: "background:#b9b9b5;border-color:#b9b9b5" }), "Check-ins"))),
+    el("div", { class: "cols2" },
+      el("div", { class: "card unmet" }, el("div", { class: "tiny" }, "Searched, not found"),
+        d.unmet_searches.length ? d.unmet_searches.map(u => el("div", { class: "row between", style: "padding:6px 0" }, el("span", {}, amen(u.amenity)), el("span", { class: "bar" }, el("span", { style: `width:${100 * u.zero_result_searches / maxU}%` })))) : el("p", { class: "muted small" }, "No unmet searches nearby in the last 28 days."),
+        el("div", { class: "note small", style: "margin-top:6px" }, "Unmet searches within 2 km = demand gaps to act on."),
+        d.recommendations.length ? el("div", { style: "margin-top:8px" }, el("div", { class: "tiny" }, "Suggested trial"), d.recommendations.slice(0, 2).map(r => el("div", { class: "row between", style: "padding:6px 0" },
+          el("div", {}, el("b", {}, r.feature), el("div", { class: "muted small" }, `≈ ${r.est_bookings_per_week} extra bookings/wk · $${r.weekly_cost}/wk`)),
+          el("button", { class: "btn sm", onclick: () => guard(async () => { await api("POST", `/api/spaces/${sid()}/rentals`, { feature_id: r.feature_id }); toast("Trial started: " + r.feature); render(); }) }, "Start trial")))) : null),
+      el("div", { class: "card" }, el("div", { class: "tiny" }, "Needs attention"),
+        d.needs_attention.length ? d.needs_attention.map(a => el("div", { style: "padding:6px 0" }, a.text)) : el("p", { class: "muted small" }, "Nothing right now."),
+        el("div", { class: "muted small", style: "margin-top:6px" }, `Utilization today ${pct(f.utilization_today)} · ${f.no_shows_today} no-shows today`))),
+    el("div", { class: "row" }, el("button", { class: "btn ghost sm", onclick: () => toast("Export is a stretch item (B7)") }, "Export report"), el("button", { class: "btn ghost sm", onclick: () => { view = "floor"; render(); } }, "Edit floor")));
+};
+
+views.floor = async () => {
+  const f = await api("GET", `/api/spaces/${sid()}/floor`);
+  const kinds = [["desk", "Desk"], ["pod", "Pod"], ["room", "Room"], ["pickup", "Pickup"], ["locker", "Locker"], ["none", "Not bookable"]];
+  return win(`${f.space_name} · ${f.floor_label}`,
+    el("div", { class: "row wrap" }, kinds.map(([k, v]) => el("button", { class: "chip" + (tag === k ? " on" : ""), onclick: () => { tag = k; render(); } }, v)),
+      el("span", { class: "note small", style: "margin-left:auto" }, "Pick a tag, then click shapes on the map.")),
+    el("div", { class: "plan", style: `grid-template-columns:repeat(${f.cols},1fr)` }, f.shapes.map(s =>
+      el("div", { class: `shape ${s.kind} ${s.kind === "none" ? "none" : ""}`, style: `grid-column:${s.col + 1}${s.kind === "room" ? " / span 2" : ""};grid-row:${s.row + 1}`,
+        onclick: () => guard(async () => { await api("PUT", `/api/desks/${s.desk_id}`, { kind: tag, capacity: tag === "room" ? 6 : tag === "pod" ? 2 : 1 }); render(); }) },
+        el("span", { class: "lbl" }, s.kind === "none" ? "?" : s.label), el("span", { class: "sub" }, s.kind === "none" ? "confirm" : `${s.kind}${s.capacity > 1 ? " · " + s.capacity : ""}`)))),
+    el("div", { class: "row between" }, el("span", { class: "muted small" }, `${f.summary.tagged} tagged · ${f.summary.to_confirm} to confirm`),
+      el("div", { class: "row" }, el("button", { class: "btn ghost sm", onclick: () => toast("Scanning is hardware; shapes come from the seed here") }, "Rescan area"), el("button", { class: "btn sm", onclick: () => { view = "rules"; render(); } }, "Set rules"))),
+    el("div", { class: "note small" }, "Shapes come from the space's phone scan. The coaster pickup point and lockers are tagged here too. Rescan one area instead of redrawing when furniture moves."));
+};
+
+views.rules = async () => {
+  const s = await api("GET", `/api/spaces/${sid()}/settings`);
+  const r = s.rules; const draft = { max_hours: r.max_hours, food: r.food, walkins: r.walkins, lockers: r.lockers, pickup: r.pickup, min_purchase_per_hour: r.min_purchase_per_hour, open_hour: s.open_hour, close_hour: s.close_hour, published: s.published };
+  const toggle = (key, opts) => el("div", { class: "row" }, opts.map(([v, label]) => el("button", { class: "chip" + (draft[key] === v ? " on" : ""), onclick: () => { draft[key] = v; render.draft = draft; render(); } }, label)));
+  render.draft = null;
+  return win(`${s.name} · rules`,
+    el("div", { class: "rule" }, el("span", {}, "Max booking"), el("div", { class: "row" }, el("input", { type: "number", min: .5, max: 8, step: .5, value: draft.max_hours, onchange: (e) => draft.max_hours = +e.target.value }), el("span", { class: "muted small" }, "h"))),
+    el("div", { class: "rule" }, el("span", {}, "Open hours"), el("div", { class: "row" }, el("input", { type: "number", min: 0, max: 24, value: draft.open_hour, onchange: (e) => draft.open_hour = +e.target.value }), el("span", { class: "muted small" }, "to"), el("input", { type: "number", min: 0, max: 24, value: draft.close_hour, onchange: (e) => draft.close_hour = +e.target.value }))),
+    el("div", { class: "rule" }, el("span", {}, "Min purchase per hour"), el("div", { class: "row" }, el("span", { class: "muted small" }, "$"), el("input", { type: "number", min: 0, step: .5, value: draft.min_purchase_per_hour, onchange: (e) => draft.min_purchase_per_hour = +e.target.value }))),
+    el("div", { class: "rule" }, el("span", {}, "Food"), toggle("food", [[true, "Yes"], [false, "No"]])),
+    el("div", { class: "rule" }, el("span", {}, "Walk-ins"), toggle("walkins", [[true, "When free"], [false, "No"]])),
+    el("div", { class: "rule" }, el("span", {}, "Lockers"), toggle("lockers", [[true, "Yes"], [false, "No"]])),
+    el("div", { class: "rule" }, el("span", {}, "Coaster pickup"), el("input", { style: "width:180px;text-align:left", value: draft.pickup, onchange: (e) => draft.pickup = e.target.value })),
+    el("div", { class: "rule" }, el("span", {}, "Away limit"), el("span", { class: "muted small" }, `${r.away_minutes} min (global rule R-BOOK-02)`)),
+    el("div", { class: "note small" }, "Walk-ins allowed when unbooked; bookings always take priority. Rules show on the space page before anyone books."),
+    el("div", { class: "row", style: "justify-content:flex-end" },
+      el("a", { class: "btn secondary sm", href: pageHref("/app"), target: "_blank" }, "Preview"),
+      el("button", { class: "btn sm", onclick: () => guard(async () => { await api("PUT", `/api/spaces/${sid()}/settings`, { ...draft, published: true }); toast("Published"); render(); }) }, "Publish")));
+};
+
+views.staff = async () => {
+  const r = await api("GET", `/api/spaces/${sid()}/staff/bookings?q=${encodeURIComponent(staffQ)}`);
+  const open = r.bookings.filter(b => ["reserved", "checked_in", "away"].includes(b.state));
+  const out = open.filter(b => b.coaster).length;
+  return el("div", { class: "cols2" },
+    win("Staff desk · check-in + coaster hand-off",
+      el("input", { placeholder: "Find by name or table", value: staffQ, oninput: (e) => { staffQ = e.target.value; clearTimeout(render._t); render._t = setTimeout(render, 250); } }),
+      el("div", { class: "list" }, open.slice(0, 8).map(b => {
+        let coaster = b.coaster || "";
+        return el("div", { class: "row between", style: "padding:9px 0" },
+          el("div", {}, el("b", {}, `${b.name} · ${b.desk_label} · ${hhmm(b.start)}–${hhmm(b.end)}`),
+            el("div", { class: "muted small" }, `${b.kind === "walkin" ? "Walk-in" : "Booked via app"}${b.phone_verified ? " · phone verified" : ""} · `, el("span", { class: "state " + b.state }, b.state.replace("_", " ")), b.coaster ? ` · coaster #${b.coaster}` : "")),
+          b.coaster ? el("button", { class: "btn ghost sm", onclick: () => guard(async () => { await api("POST", `/api/bookings/${b.booking_id}/return_coaster`, {}); toast(`Coaster #${b.coaster} returned · session closed`); render(); }) }, "Coaster returned")
+            : el("div", { class: "row" }, el("input", { placeholder: "#", style: "width:64px;padding:5px 8px", oninput: (e) => coaster = e.target.value }),
+              el("button", { class: "btn sm", onclick: () => guard(async () => { await api("POST", `/api/bookings/${b.booking_id}/handoff`, { coaster }); toast("Checked in"); render(); }) }, b.state === "reserved" ? "Hand off + check in" : "Hand off")));
+      }), !open.length ? el("p", { class: "muted small" }, "No open bookings match.") : null),
+      el("div", { class: "muted small" }, `Coasters out: ${out} · staff hand-off = theft control + check-in in one step`)),
+    win("New walk-in (no phone)",
+      el("p", { class: "small muted" }, "Someone sits down without scanning. Hold a free table for them by name so the floor shows it as in use (walk-in)."),
+      el("div", { id: "walkinform" }),
+      el("div", { class: "note small" }, "Every digital step has a desk / display fallback, so no one hits an added barrier.")));
+};
+
+async function walkinForm() {
+  const box = $("walkinform"); if (!box) return;
+  const f = await api("GET", `/api/spaces/${sid()}/floor`);
+  const free = f.shapes.filter(s => s.status === "free");
+  let desk = free[0] && free[0].desk_id, name = "";
+  box.innerHTML = "";
+  box.append(el("div", { class: "col" }, el("input", { placeholder: "Name", oninput: (e) => name = e.target.value }),
+    el("select", { onchange: (e) => desk = +e.target.value }, free.map(s => el("option", { value: s.desk_id }, `${s.label} · free till ${hhmm(s.free_until)}`))),
+    el("button", { class: "btn sm", disabled: !free.length, onclick: () => guard(async () => {
+      const phone = "412555" + String(Math.floor(1000 + Math.random() * 9000));
+      await api("POST", `/api/desks/${desk}/hold`, { phone, name: name || "Walk-in" }); toast("Table held"); render(); }) }, "Check in walk-in")));
+}
+
+async function render() {
+  $("tabs").innerHTML = "";
+  for (const [k, label] of [["dashboard", "Dashboard"], ["floor", "Tag zones"], ["rules", "Rules"], ["staff", "Staff desk"]])
+    $("tabs").append(el("button", { class: "chip" + (view === k ? " on" : ""), onclick: () => { view = k; render(); } }, label));
+  const sp = META.spaces.find(s => s.id === sid());
+  $("hours").textContent = `${sp.kind} · open ${hourLabel(sp.open_hour)}–${hourLabel(sp.close_hour % 24)}`;
+  const node = await guard(views[view]);
+  if (node) { $("view").innerHTML = ""; $("view").append(node); if (view === "staff") guard(walkinForm); }
+}
+(async () => {
+  await loadMeta();
+  META.spaces.forEach(s => $("space").append(el("option", { value: s.id, selected: s.id === +param("space", 2) }, s.name)));
+  $("space").onchange = render;
+  if (!window.CS_STATIC) await topbar("/provider");
+  else document.querySelector("main").prepend(el("a", { href: "index.html", class: "muted small" }, "← Demo home"));
+  render(); onTick.push(render); setInterval(() => { if (view === "dashboard") render(); }, 8000);
+})();
+</script>
+</body>
+</html>

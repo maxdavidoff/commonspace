@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CommonSpace · Floor display</title>
+<link rel="stylesheet" href="common.css"><link rel="icon" href="data:,">
+<style>
+  .display { grid-template-columns: 1.4fr 1fr; grid-template-rows: auto 1fr; }
+  .display h1 { grid-column: 1 / -1; font-size: 30px; }
+  .plan .shape { min-height: 84px; font-size: 16px; }
+  .qr { width: 110px; height: 110px; background: repeating-conic-gradient(var(--ink) 0 25%, #fff 0 50%) 0 0 / 22px 22px; border: 6px solid #fff; outline: 1.5px solid var(--ink); }
+</style>
+</head>
+<body>
+<div class="display" id="d"></div>
+<script src="demo.js"></script>
+<script src="api.js"></script>
+<script>
+const spaceId = +param("space", 2);
+async function render() {
+  const f = await api("GET", `/api/spaces/${spaceId}/floor`);
+  const d = document.getElementById("d"); d.innerHTML = "";
+  const soon = f.shapes.filter(s => s.status === "booked_soon" || (s.status === "free" && s.next_booking_at));
+  const quiet = META.spaces.find(s => s.id !== spaceId && s.kind === "library");
+  d.append(
+    el("h1", { class: "row between" }, el("span", {}, `${f.space_name} · ${f.floor_label} · right now`), el("span", { class: "muted" }, hhmm(f.now))),
+    el("div", {}, el("div", { class: "plan", style: `grid-template-columns:repeat(${f.cols},1fr)` }, f.shapes.map(s =>
+        el("div", { class: `shape ${s.kind} ${s.status}`, style: `grid-column:${s.col + 1}${s.kind === "room" ? " / span 2" : ""};grid-row:${s.row + 1}` },
+          el("span", { class: "lbl" }, s.label),
+          el("span", { class: "sub" }, s.kind === "pickup" ? "Coaster pickup" : s.kind === "locker" ? "Lockers" : s.status === "free" ? (s.next_booking_at ? `until ${hhmm(s.next_booking_at)}` : "open") : s.status === "booked_soon" ? `booked ${hhmm(s.next_booking_at)}` : s.status === "in_use" ? `until ${hhmm(s.current_until)}` : s.status === "booked" ? "arriving" : "")))),
+      el("div", { class: "legend", style: "margin-top:14px" }, el("span", {}, el("i"), "Open"), el("span", {}, el("i", { class: "in_use" }), "In use"), el("span", {}, el("i", { class: "booked_soon" }), "Booked soon"), el("span", {}, el("i", { style: "border-radius:50%;width:12px" }), "You are here"))),
+    el("div", { class: "col", style: "gap:22px" },
+      el("div", {}, el("div", { class: "big" }, f.open_now ? f.summary.open : "—"), el("div", { style: "font-size:22px" }, f.open_now ? "desks open" : "closed right now")),
+      el("div", { class: "list", style: "font-size:18px" }, soon.slice(0, 3).map(s => el("div", { class: "row between", style: "padding:8px 0" }, el("b", {}, s.label), el("span", {}, s.status === "free" ? `until ${hhmm(s.next_booking_at)}` : `booked ${hhmm(s.next_booking_at)}`)))),
+      quiet ? el("div", { class: "panel", style: "font-size:16px" }, `Quiet space ↗ ${quiet.name}`, el("div", { class: "muted small" }, "Points people to quieter spaces they might not know about.")) : null,
+      el("div", { class: "row", style: "gap:16px" }, el("div", { class: "qr" }), el("div", { style: "font-size:18px" }, "Scan to find + hold a table", el("div", { class: "muted small" }, "Walk-ins jump straight to the browser hold page. No app download.")))));
+}
+(async () => {
+  await loadMeta();
+  if (!window.CS_STATIC) await topbar("/floor", el("select", { onchange: (e) => location.href = pageHref("/floor") + "?space=" + e.target.value, style: "width:auto;padding:4px 8px;border-radius:6px" },
+    META.spaces.map(s => el("option", { value: s.id, selected: s.id === spaceId }, s.name))));
+  else document.body.prepend(el("div", { class: "row", style: "padding:10px 40px;background:#fff;border-bottom:1px solid var(--line)" }, el("a", { href: "index.html", class: "muted small" }, "← Demo home"), el("select", { onchange: (e) => location.search = "?space=" + e.target.value, style: "width:auto" }, META.spaces.map(s => el("option", { value: s.id, selected: s.id === spaceId }, s.name)))));
+  guard(render); onTick.push(() => guard(render)); setInterval(() => guard(render), 5000);
+})();
+</script>
+</body>
+</html>
