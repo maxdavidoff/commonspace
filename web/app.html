@@ -12,6 +12,8 @@
     <div class="card"><h3>Pre-book prototype</h3>
       <p class="muted small" id="sidehint">Find a space → space detail and rules → pick a table and time → phone for updates → confirmed → arrive → check in → locker → in session → step away → wrap up. New users get a 3-step preference set-up (how you work, must-haves, distance and hours) on first open or after their first booking.</p>
       <div class="row wrap" id="jump"></div></div>
+    <div class="card"><h3>Intake funnel <span class="muted small" style="font-weight:400">last 28 days</span></h3>
+      <div id="funnelcard" class="small"></div></div>
     <div class="card"><h3>Simulate</h3>
       <p class="muted small">Away prompts, no-show releases and coaster timers run on the server clock. Fast-forward it here.</p>
       <div class="row wrap" id="simbtns"></div>
@@ -40,12 +42,17 @@ function query() {
            amenities: [...S.filters], work_mode: S.workMode || "focus" };
 }
 async function loadPrefs() { S.prefs = await api("GET", `/api/users/${S.user}/preferences`); return S.prefs; }
-function startFunnel(after) {
+function track(step, action) {
+  api("POST", `/api/users/${S.user}/funnel`, { step, action, entry: S.funnel.entry || "manual" }).catch(() => {});
+}
+const FSTEPS = ["mode", "needs", "where"];
+function startFunnel(after, entry = "manual") {
   const p = S.prefs || {};
-  S.funnel = { step: 0, after, draft: {
+  S.funnel = { step: 0, after, entry, draft: {
     work_mode: S.workMode || p.work_mode || "focus",
     amenities: new Set(S.filters.size ? S.filters : (p.amenities || [])),
     max_km: p.max_km || 3, hours: new Set(p.hours || []) } };
+  track("prompt", "shown");
   go("funnel");
 }
 async function myBooking() {
@@ -60,6 +67,8 @@ const screens = {};
 
 screens.find = async () => {
   if (!S.prefs) await loadPrefs();
+  S.autoShown = S.autoShown || new Set();
+  if (!S.prefs.has_profile && !S.autoShown.has(S.user)) { S.autoShown.add(S.user); return startFunnel("find", "first_open"); }
   const m = await api("POST", "/api/map", query());
   const list = m.spaces.filter(s => s.in_range).sort((a, b) => b.free - a.free);
   const pins = (() => {
@@ -89,7 +98,7 @@ screens.find = async () => {
           S.filters.has(a) ? "✓ " : "", amen(a))))),
     S.prefs && !S.prefs.has_profile ? el("div", { class: "card row between", style: "background:var(--panel);border:0" },
       el("div", {}, el("b", {}, "Set up your defaults"), el("div", { class: "muted small" }, "30 seconds. Desks get ranked by how you work.")),
-      el("button", { class: "btn sm", onclick: () => startFunnel("find") }, "Start")) : null,
+      el("button", { class: "btn sm", onclick: () => startFunnel("find", "manual") }, "Start")) : null,
     pins,
     el("div", { id: "spacelist", class: "col" }),
   );
@@ -100,7 +109,7 @@ screens.find = async () => {
       box.append(el("div", { class: "card", style: "cursor:pointer", onclick: () => openSpace(s) },
         el("div", { class: "row between" }, el("b", {}, s.name),
           el("span", { class: "pill" }, s.status === "closed" ? "Closed" : s.status === "no_match" ? "No match" : `${s.free} open`)),
-        el("div", { class: "muted small" }, `${s.distance_km} km · ${s.close_hour <= 17 ? "Closes " + hourLabel(s.close_hour) : "Open until " + hourLabel(s.close_hour)}` +
+        el("div", { class: "muted small" }, `${s.distance_km} km · ${s.open_hour === 0 && s.close_hour >= 24 ? "Open 24 hours" : s.close_hour <= 17 ? "Closes " + hourLabel(s.close_hour) : "Open until " + hourLabel(s.close_hour)}` +
           (s.status === "limited" ? " · last table" : ""))));
     }
     if (!list.length) box.append(el("p", { class: "muted small" }, "Nothing in range. This search still counts as demand, so spaces see what's missing."));
@@ -197,7 +206,7 @@ screens.confirm = async () => {
     el("div", { class: "card steps" }, el("div", {}, S.rules.pickup), el("div", {}, "Get coaster"), el("div", {}, "Tap at table")),
     el("div", { class: "illus", style: "min-height:110px;font-size:13px;color:var(--muted)" }, `Route: ${S.rules.pickup.toLowerCase()} → ${b.desk_label}`),
     !(S.prefs && S.prefs.has_profile) ? el("div", { class: "card row between" }, el("div", {}, el("span", {}, "Save these as your defaults?"), el("div", { class: "muted small" }, `${S.search ? S.search.work_mode : "focus"}${S.filters.size ? " · " + [...S.filters].map(amen).join(", ") : ""}`)),
-      el("div", { class: "row" }, el("button", { class: "btn sm", onclick: () => startFunnel("confirm") }, "Save"), el("button", { class: "btn ghost sm", onclick: () => guard(async () => {
+      el("div", { class: "row" }, el("button", { class: "btn sm", onclick: () => startFunnel("confirm", "after_booking") }, "Save"), el("button", { class: "btn ghost sm", onclick: () => guard(async () => {
         S.prefs = await api("PUT", `/api/users/${S.user}/preferences`, { work_mode: S.search ? S.search.work_mode : undefined, amenities: [...S.filters], source: "booking" }); render(); }) }, "Just these"))) : null,
     el("div", { class: "note small" }, `Check in within ${META.config.no_show_minutes} min of ${hhmm(b.start)} or the table is released.`),
     el("div", { class: "bottom col" }, el("button", { class: "btn secondary block", onclick: () => toast("Added to calendar (prototype)") }, "Add to calendar"),
@@ -312,9 +321,10 @@ const HOURS = { morning: "Morning", midday: "Midday", afternoon: "Afternoon", ev
 screens.funnel = async () => {
   const f = S.funnel, d = f.draft, step = f.step;
   const dots = el("div", { class: "dots" }, [0, 1, 2].map(i => el("i", { class: i === step ? "on" : "" })));
-  const skip = el("div", { class: "row between" }, step ? el("button", { class: "back", onclick: () => { f.step--; render(); } }, "‹") : el("span"),
-    el("button", { class: "btn ghost sm", onclick: () => finish(false) }, "Skip"));
-  const next = (label) => el("div", { class: "bottom" }, el("button", { class: "btn block", onclick: () => { if (step < 2) { f.step++; render(); } else finish(true); } }, label));
+  const skip = el("div", { class: "row between" }, step ? el("button", { class: "back", onclick: () => { track(FSTEPS[step], "back"); f.step--; render(); } }, "‹") : el("span"),
+    el("button", { class: "btn ghost sm", onclick: () => { track(FSTEPS[step], "skip"); finish(false); } }, "Skip"));
+  const next = (label) => el("div", { class: "bottom" }, el("button", { class: "btn block", onclick: () => { if (step < 2) { f.step++; track(FSTEPS[f.step], "next"); render(); } else { track("where", "save"); finish(true); } } }, label));
+  if (step === 0 && !f.loggedMode) { f.loggedMode = true; track("mode", "next"); }
   if (step === 0) screen(skip, dots, el("h2", {}, "How do you usually work?"), el("div", { class: "muted small" }, "Sets what we rank first. Change it any time."),
     el("div", { class: "col" }, Object.entries(MODES).map(([k, [t, sub]]) => el("div", { class: "card row between", style: d.work_mode === k ? "border-color:var(--ink);outline:2px solid var(--ink)" : "", onclick: () => { d.work_mode = k; render(); } },
       el("div", {}, el("b", {}, t), el("div", { class: "muted small" }, sub)), el("span", { class: "box", style: "width:20px;height:20px;border:1.5px solid var(--ink);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px" }, d.work_mode === k ? "●" : "")))),
@@ -332,7 +342,7 @@ screens.funnel = async () => {
     next("Save defaults"));
   async function finish(save) {
     if (save) await guard(async () => {
-      S.prefs = await api("PUT", `/api/users/${S.user}/preferences`, { work_mode: d.work_mode, amenities: [...d.amenities], max_km: d.max_km, hours: [...d.hours], source: "onboarding" });
+      S.prefs = await api("PUT", `/api/users/${S.user}/preferences`, { work_mode: d.work_mode, amenities: [...d.amenities], max_km: d.max_km, hours: [...d.hours], source: f.entry === "after_booking" ? "booking" : "onboarding" });
       S.workMode = d.work_mode; S.filters = new Set(d.amenities); toast("Defaults saved");
     });
     go(f.after);
@@ -340,10 +350,21 @@ screens.funnel = async () => {
 };
 
 // ------------------------------------------------------------ boot
+async function funnelCard() {
+  const r = await api("GET", "/api/funnel");
+  const box = $("funnelcard"); box.innerHTML = "";
+  const label = { prompt: "Saw the prompt", mode: "How you work", needs: "Must-haves", where: "Distance + hours", done: "Saved" };
+  box.append(el("div", { class: "muted", style: "margin-bottom:6px" }, `${Math.round(r.profile_share * 100)}% of ${r.users} users have a profile · ${Math.round(r.completion_rate * 100)}% of starters finish`));
+  for (const st of r.steps) box.append(el("div", { style: "margin:4px 0" },
+    el("div", { class: "row between" }, el("span", {}, label[st.step]), el("span", { class: "muted" }, `${st.users}${st.skipped_here ? " · " + st.skipped_here + " skipped" : ""}`)),
+    el("div", { class: "bar" }, el("span", { style: `width:${Math.round(st.share * 100)}%` }))));
+  box.append(el("div", { class: "muted", style: "margin-top:6px" }, "Profiles by source: " + Object.entries(r.profiles_by_source).map(([k, v]) => `${k} ${v}`).join(" · ")));
+}
 async function render() {
+  guard(funnelCard);
   $("jump").innerHTML = "";
   for (const [k, label] of [["find", "Find"], ["funnel", "Set up"], ["space", "Space"], ["pick", "Pick"], ["confirm", "Booked"], ["checkin", "Check in"], ["session", "Session"], ["wrap", "Wrap up"]])
-    $("jump").append(el("button", { class: "chip" + (S.screen === k ? " on" : ""), onclick: () => guard(async () => { if (k === "funnel") return startFunnel("find"); if (["confirm", "checkin", "session", "wrap"].includes(k) && !(await myBooking())) return toast("Book a table first"); if (k !== "find" && !S.space) return toast("Pick a space first"); go(k); }) }, label));
+    $("jump").append(el("button", { class: "chip" + (S.screen === k ? " on" : ""), onclick: () => guard(async () => { if (k === "funnel") return startFunnel("find", "manual"); if (["confirm", "checkin", "session", "wrap"].includes(k) && !(await myBooking())) return toast("Book a table first"); if (k !== "find" && !S.space) return toast("Pick a space first"); go(k); }) }, label));
   await guard(screens[S.screen]);
 }
 (async () => {
@@ -354,7 +375,7 @@ async function render() {
     if (r.released.length) toast("Released: " + r.released.map(x => x.reason.replace("_", " ")).join(", ")); render(); }) }, `+${m} min`));
   $("simnow").textContent = "Sim time " + hhmm(META.now);
   const sel = el("select", { style: "margin-top:8px", onchange: (e) => { S.user = +e.target.value; S.userVerified = true; S.booking = null; S.prefs = null; S.filters = new Set(); render(); } },
-    META.users.slice(0, 12).map(u => el("option", { value: u.id }, `Act as ${u.name}`)));
+    META.users.slice(0, 12).map(u => el("option", { value: u.id, selected: u.id === S.user }, `Act as ${u.name}${u.id % 4 === 0 ? " (new)" : ""}`)));
   $("simbtns").after(sel);
   if (!STATIC) await topbar("/app");
   render();

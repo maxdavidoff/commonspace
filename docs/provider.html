@@ -137,7 +137,7 @@ async function render() {
   for (const [k, label] of [["dashboard", "Dashboard"], ["floor", "Tag zones"], ["rules", "Rules"], ["staff", "Staff desk"]])
     $("tabs").append(el("button", { class: "chip" + (view === k ? " on" : ""), onclick: () => { view = k; render(); } }, label));
   const sp = META.spaces.find(s => s.id === sid());
-  $("hours").textContent = `${sp.kind} · open ${hourLabel(sp.open_hour)}–${hourLabel(sp.close_hour % 24)}`;
+  $("hours").textContent = `${sp.kind} · ` + (sp.open_hour === 0 && sp.close_hour >= 24 ? "open 24 hours" : `open ${hourLabel(sp.open_hour)}–${hourLabel(sp.close_hour % 24)}`);
   const node = await guard(views[view]);
   if (node) { $("view").innerHTML = ""; $("view").append(node); if (view === "staff") guard(walkinForm); }
 }

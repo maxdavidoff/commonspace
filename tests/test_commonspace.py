@@ -139,6 +139,23 @@ class SearchTests(Base):
             with self.assertRaises(ApiError):
                 matching.save_prefs(self.conn, 1, bad)
 
+    def test_funnel_report_counts_dropoff(self):
+        for uid, last in [(1, "where"), (2, "mode"), (3, "needs")]:
+            matching.funnel_event(self.conn, uid, {"step": "prompt", "action": "shown", "entry": "first_open"})
+            for st in ["mode", "needs", "where"][: ["mode", "needs", "where"].index(last) + 1]:
+                matching.funnel_event(self.conn, uid, {"step": st, "action": "next", "entry": "first_open"})
+        matching.funnel_event(self.conn, 1, {"step": "where", "action": "save", "entry": "first_open"})
+        matching.save_prefs(self.conn, 1, {"source": "onboarding"})
+        matching.funnel_event(self.conn, 2, {"step": "mode", "action": "skip", "entry": "first_open"})
+        r = matching.funnel_report(self.conn)
+        by = {s["step"]: s for s in r["steps"]}
+        self.assertEqual([by[s]["users"] for s in ("prompt", "mode", "needs", "where", "done")], [3, 3, 2, 1, 1])
+        self.assertEqual((r["started"], r["completed"], r["completion_rate"]), (3, 1, 0.333))
+        self.assertEqual(by["mode"]["skipped_here"], 1)
+        self.assertEqual(r["profiles_by_source"], {"onboarding": 1})
+        with self.assertRaises(ApiError):
+            matching.funnel_event(self.conn, 1, {"step": "lunch", "action": "next"})
+
     def test_saved_profile_used_for_score(self):
         matching.save_prefs(self.conn, 1, {"amenities": ["printer"], "max_km": 3})
         r = {d["desk_id"]: d for d in matching.search(self.conn, q())["results"]}
@@ -647,6 +664,8 @@ class HttpTests(unittest.TestCase):
         self.assertEqual((s, st["status"]), (200, "free"))
         s, h = self.call("POST", "/api/desks/2/hold", {"phone": "412-555-0150"})
         self.assertEqual((s, h["kind"]), (200, "walkin"))
+        self.assertEqual(self.call("POST", "/api/users/1/funnel", {"step": "prompt", "action": "shown"})[0], 200)
+        self.assertEqual(self.call("GET", "/api/funnel?days=7")[1]["window_days"], 7)
         s, d = self.call("GET", "/api/spaces/1/dashboard?period=week")
         self.assertEqual((s, d["period"]), (200, "week"))
         self.assertEqual(self.call("PUT", "/api/spaces/1/settings", {"food": False})[1]["rules"]["food"], False)

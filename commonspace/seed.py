@@ -144,11 +144,35 @@ def _seed(conn, rng_seed):
                           rng.choice([2.0, 3.0, 3.0, 5.0]), rng.choice(["morning,midday", "midday,afternoon", "afternoon,evening"]),
                           rng.choice(["onboarding", "onboarding", "booking", "search"]), clock.fmt(now - timedelta(days=rng.randint(1, 40)))))
 
+    _funnel_history(conn, rng, now)
     spaces = conn.execute("SELECT * FROM spaces").fetchall()
     desks = conn.execute("SELECT * FROM desks WHERE bookable=1").fetchall()
     _history_searches(conn, rng, now, spaces, desks)
     _history_bookings(conn, rng, now, spaces, desks)
     _current_bookings(conn, now, spaces)
+
+
+def _funnel_history(conn, rng, now):
+    """Funnel events for seeded users: those with an onboarding profile completed it; others
+    saw the prompt and dropped at some step. Gives the funnel report realistic drop-off."""
+    steps = ["prompt", "mode", "needs", "where"]
+    rows = []
+    for u in conn.execute("SELECT u.id, p.source FROM users u LEFT JOIN preferences p ON p.user_id=u.id"):
+        ts = now - timedelta(days=rng.randint(1, 27), hours=rng.randint(0, 10))
+        entry = "first_open" if u["source"] != "booking" else "after_booking"
+        if u["source"] in ("onboarding", "booking"):
+            reach = 4
+        elif u["source"] == "search":
+            continue                                  # saved from a search, never saw the flow
+        else:
+            reach = rng.choice([1, 1, 2, 3])          # dropped
+        for i, st in enumerate(steps[:reach]):
+            rows.append((u["id"], clock.fmt(ts + timedelta(seconds=10 * i)), st, "shown" if i == 0 else "next", entry))
+        if reach == 4:
+            rows.append((u["id"], clock.fmt(ts + timedelta(seconds=45)), "where", "save", entry))
+        else:
+            rows.append((u["id"], clock.fmt(ts + timedelta(seconds=10 * reach)), steps[reach - 1], "skip", entry))
+    conn.executemany("INSERT INTO funnel_events(user_id, ts, step, action, entry) VALUES (?,?,?,?,?)", rows)
 
 
 def _history_searches(conn, rng, now, spaces, desks):

@@ -59,6 +59,9 @@ CREATE TABLE IF NOT EXISTS rentals(                -- E-RENTAL
     id INTEGER PRIMARY KEY, space_id INTEGER NOT NULL REFERENCES spaces(id),
     feature_id INTEGER NOT NULL REFERENCES features(id),
     started_at TEXT NOT NULL, ended_at TEXT);
+CREATE TABLE IF NOT EXISTS funnel_events(         -- preference intake funnel steps
+    id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), ts TEXT NOT NULL,
+    step TEXT NOT NULL, action TEXT NOT NULL, entry TEXT);
 CREATE TABLE IF NOT EXISTS device_events(          -- E-DEVICE-EVENT
     id INTEGER PRIMARY KEY, puck_id INTEGER NOT NULL, ts TEXT NOT NULL,
     kind TEXT NOT NULL, user_id INTEGER, detail TEXT);

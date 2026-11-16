@@ -40,6 +40,8 @@ class App:
              lambda m, b: matching.get_prefs(c, db.user(c, int(m[1]))["id"])),
             ("PUT", r"/api/users/(\d+)/preferences", lambda m, b: matching.save_prefs(c, int(m[1]), b)),
             ("POST", r"/api/users/phone", lambda m, b: spaces.phone_user(c, b)),
+            ("POST", r"/api/users/(\d+)/funnel", lambda m, b: matching.funnel_event(c, int(m[1]), b)),
+            ("GET", r"/api/funnel", lambda m, b: matching.funnel_report(c, int((b or {}).get("days", 28)))),
             ("GET", r"/api/desks/(\d+)/status", lambda m, b: spaces.desk_status(c, int(m[1]))),
             ("POST", r"/api/desks/(\d+)/hold", lambda m, b: spaces.hold_desk(c, int(m[1]), b)),
             ("PUT", r"/api/desks/(\d+)", lambda m, b: spaces.tag_desk(c, int(m[1]), b)),

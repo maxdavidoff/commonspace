@@ -66,6 +66,69 @@ def _mode(value):
     return value
 
 
+# ---------- intake funnel (new-user preference capture) ----------
+
+FUNNEL_STEPS = ("prompt", "mode", "needs", "where", "done")
+FUNNEL_ACTIONS = ("shown", "next", "back", "skip", "save")
+FUNNEL_ENTRIES = ("first_open", "after_booking", "manual")
+
+
+def funnel_event(conn, user_id, data):
+    """POST /api/users/{id}/funnel {step, action, entry}: one step of the set-up flow."""
+    db.user(conn, user_id)
+    if not isinstance(data, dict):
+        raise ApiError("body must be a JSON object")
+    step, action, entry = data.get("step"), data.get("action"), data.get("entry", "manual")
+    if step not in FUNNEL_STEPS:
+        raise ApiError(f"step must be one of {', '.join(FUNNEL_STEPS)}")
+    if action not in FUNNEL_ACTIONS:
+        raise ApiError(f"action must be one of {', '.join(FUNNEL_ACTIONS)}")
+    if entry not in FUNNEL_ENTRIES:
+        raise ApiError(f"entry must be one of {', '.join(FUNNEL_ENTRIES)}")
+    conn.execute("INSERT INTO funnel_events(user_id, ts, step, action, entry) VALUES (?,?,?,?,?)",
+                 (user_id, clock.fmt(clock.now()), step, action, entry))
+    return {"ok": True}
+
+
+def funnel_report(conn, days=28):
+    """GET /api/funnel: how many people reach each step, where they drop, and how profiles were made.
+
+    Counts distinct users, so repeat visits don't inflate a step. Platform-level, never per user.
+    """
+    from datetime import timedelta
+    since = clock.fmt(clock.now() - timedelta(days=days))
+    rows = conn.execute("SELECT user_id, step, action, entry FROM funnel_events WHERE ts >= ?", (since,)).fetchall()
+    reached = {s: set() for s in FUNNEL_STEPS}
+    skipped = {s: set() for s in FUNNEL_STEPS}
+    entries = {}
+    for r in rows:
+        if r["action"] in ("shown", "next", "save"):
+            reached[r["step"]].add(r["user_id"])
+        if r["action"] == "save":
+            reached["done"].add(r["user_id"])
+        if r["action"] == "skip":
+            skipped[r["step"]].add(r["user_id"])
+        if r["step"] == "prompt" and r["action"] == "shown":
+            entries.setdefault(r["entry"], set()).add(r["user_id"])
+    top = len(reached["prompt"]) or 1
+    steps = [{"step": s, "users": len(reached[s]), "share": round(len(reached[s]) / top, 3),
+              "skipped_here": len(skipped[s])} for s in FUNNEL_STEPS]
+    users = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    sources = {r["source"]: r["n"] for r in conn.execute(
+        "SELECT source, COUNT(*) n FROM preferences WHERE source IS NOT NULL GROUP BY source")}
+    with_profile = sum(sources.values())
+    started = len(reached["prompt"])
+    return {
+        "window_days": days, "users": users, "with_profile": with_profile,
+        "profile_share": round(with_profile / users, 3) if users else 0.0,
+        "started": started, "completed": len(reached["done"]),
+        "completion_rate": round(len(reached["done"]) / started, 3) if started else 0.0,
+        "steps": steps,
+        "entries": {k: len(v) for k, v in entries.items()},
+        "profiles_by_source": sources,
+    }
+
+
 # ---------- query parsing ----------
 
 def parse_query(conn, q):
